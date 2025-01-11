@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+type WindowConfig struct {
+	PositionX   int
+	PositionY   int
+	Width       int
+	Height      int
+	BorderWidth int
+	Title       string
+}
+
 type Window struct {
 	platformWinWrapper platformWindowWrapper
 	defaultPane        *Pane

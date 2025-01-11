@@ -7,6 +7,11 @@ import (
 	"sync"
 )
 
+type PaneConfig struct {
+	Width, Height    int
+	OffsetX, OffsetY int
+}
+
 type Pane struct {
 	Config             *PaneConfig
 	layers             []*Layer
