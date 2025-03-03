@@ -1,5 +1,7 @@
 package xgraph
 
+import "github.com/kjkrol/gokx/internal/platform"
+
 type Event interface{}
 
 type Expose struct{}
@@ -28,3 +30,30 @@ type CreateNotify struct{}
 type DestroyNotify struct{}
 type ClientMessage struct{}
 type UnexpectedEvent struct{}
+
+func convert(event platform.Event) Event {
+	switch e := event.(type) {
+	case platform.KeyPress:
+		return KeyPress{Code: e.Code, Label: e.Label}
+	case platform.KeyRelease:
+		return KeyRelease{Code: e.Code, Label: e.Label}
+	case platform.ButtonPress:
+		return ButtonPress{Button: e.Button, X: e.X, Y: e.Y}
+	case platform.ButtonRelease:
+		return ButtonRelease{Button: e.Button, X: e.X, Y: e.Y}
+	case platform.MotionNotify:
+		return MotionNotify{X: e.X, Y: e.Y}
+	case platform.EnterNotify:
+		return EnterNotify{}
+	case platform.LeaveNotify:
+		return LeaveNotify{}
+	case platform.CreateNotify:
+		return CreateNotify{}
+	case platform.DestroyNotify:
+		return DestroyNotify{}
+	case platform.ClientMessage:
+		return ClientMessage{}
+	default:
+		return UnexpectedEvent{}
+	}
+}

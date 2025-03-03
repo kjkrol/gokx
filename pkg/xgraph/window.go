@@ -5,6 +5,8 @@ import (
 	"math"
 	"sync"
 	"time"
+
+	"github.com/kjkrol/gokx/internal/platform"
 )
 
 type WindowConfig struct {
@@ -16,8 +18,12 @@ type WindowConfig struct {
 	Title       string
 }
 
+func (w WindowConfig) convert() platform.WindowConfig {
+	return platform.WindowConfig{PositionX: w.PositionX, PositionY: w.PositionY, Width: w.Width, Height: w.Height, BorderWidth: w.BorderWidth, Title: w.Title}
+}
+
 type Window struct {
-	platformWinWrapper platformWindowWrapper
+	platformWinWrapper platform.PlatformWindowWrapper
 	defaultPane        *Pane
 	panes              map[string]*Pane
 	rerfreshing        bool
@@ -27,8 +33,9 @@ type Window struct {
 }
 
 func NewWindow(conf WindowConfig) *Window {
+	platformConfig := conf.convert()
 	window := Window{
-		platformWinWrapper: newPlatformWindowWrapper(conf),
+		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
 	}
 	window.defaultPane = newPane(
@@ -38,14 +45,14 @@ func NewWindow(conf WindowConfig) *Window {
 			OffsetX: 0,
 			OffsetY: 0,
 		},
-		window.platformWinWrapper.newPlatformImageWrapper)
+		window.platformWinWrapper.NewPlatformImageWrapper)
 	window.ctx, window.cancel = context.WithCancel(context.Background())
 	window.rerfreshing = false
 	return &window
 }
 
 func (w *Window) AddPane(name string, conf *PaneConfig) *Pane {
-	pane := newPane(conf, w.platformWinWrapper.newPlatformImageWrapper)
+	pane := newPane(conf, w.platformWinWrapper.NewPlatformImageWrapper)
 	w.panes[name] = pane
 	return pane
 }
@@ -59,7 +66,7 @@ func (w *Window) GetPaneByName(name string) *Pane {
 }
 
 func (w *Window) Show() {
-	w.platformWinWrapper.show()
+	w.platformWinWrapper.Show()
 }
 
 func (w *Window) Refresh(fps int) {
@@ -84,7 +91,6 @@ func (w *Window) Refresh(fps int) {
 					pane.Refresh()
 				}
 			}
-
 		}
 	}()
 }
@@ -100,7 +106,7 @@ func (w *Window) Close() {
 		pane.Close()
 	}
 	w.panes = nil
-	w.platformWinWrapper.close()
+	w.platformWinWrapper.Close()
 
 }
 
@@ -111,7 +117,8 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 			w.wg.Wait()
 			return
 		default:
-			event := w.platformWinWrapper.nextEvent()
+			platformEvent := w.platformWinWrapper.NextEvent()
+			event := convert(platformEvent)
 			handleEvent(event)
 		}
 	}

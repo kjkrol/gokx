@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"image/draw"
 	"sync"
+
+	"github.com/kjkrol/gokx/internal/platform"
 )
 
 type PaneConfig struct {
@@ -19,12 +21,12 @@ type Pane struct {
 	offscreenImg       *image.RGBA
 	dirtyRects         []*image.Rectangle
 	mu                 sync.Mutex // Mutex to protect the dirty flag
-	platformImgWrapper platformImageWrapper
+	platformImgWrapper platform.PlatformImageWrapper
 }
 
 func newPane(
 	conf *PaneConfig,
-	newPlatformImageWrapper func(img *image.RGBA, offsetX, offsetY int) platformImageWrapper,
+	newPlatformImageWrapper func(img *image.RGBA, offsetX, offsetY int) platform.PlatformImageWrapper,
 ) *Pane {
 	img := image.NewRGBA(image.Rect(0, 0, conf.Width, conf.Height))
 	imageWrapper := newPlatformImageWrapper(img, conf.OffsetX, conf.OffsetY)
@@ -107,7 +109,7 @@ func (p *Pane) Refresh() {
 	}
 
 	// Update the on-screen image
-	p.platformImgWrapper.update(p.img.Rect)
+	p.platformImgWrapper.Update(p.img.Rect)
 }
 
 func combineLayers(target *image.RGBA, layer *Layer, rect *image.Rectangle) {
@@ -136,7 +138,7 @@ func convertRGBAToBGRA(img *image.RGBA, rect *image.Rectangle) {
 }
 
 func (p *Pane) Close() {
-	p.platformImgWrapper.delete()
+	p.platformImgWrapper.Delete()
 	p.Config = nil
 	for i := range p.layers {
 		p.layers[i].Img = nil

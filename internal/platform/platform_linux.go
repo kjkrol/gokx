@@ -1,6 +1,6 @@
 //go:build linux
 
-package xgraph
+package platform
 
 /*
 #cgo CFLAGS: -I/usr/include/X11
@@ -63,7 +63,7 @@ const (
 
 // ----------------------------------------------------------------------------
 
-func newPlatformWindowWrapper(conf WindowConfig) platformWindowWrapper {
+func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 
 	conn, err := newXConnection()
 	if err != nil {
@@ -147,7 +147,7 @@ type linuxImageWrapper struct {
 	offsetX, offsetY int
 }
 
-func (xw *linuxImageWrapper) update(rect image.Rectangle) {
+func (xw *linuxImageWrapper) Update(rect image.Rectangle) {
 	C.XPutImage(
 		xw.win.conn.display,
 		xw.win.window,
@@ -162,7 +162,7 @@ func (xw *linuxImageWrapper) update(rect image.Rectangle) {
 	// C.XFlush(xw.win.conn.display)
 }
 
-func (xw *linuxImageWrapper) delete() {
+func (xw *linuxImageWrapper) Delete() {
 	C.destroyImage(xw.xImage)
 	xw.xImage = nil
 }
@@ -175,26 +175,26 @@ type linuxWindowWrapper struct {
 	title  *C.char
 }
 
-func (w *linuxWindowWrapper) show() {
+func (w *linuxWindowWrapper) Show() {
 	C.XMapWindow(w.conn.display, w.window)
 
 	wmDeleteWindow := C.XInternAtom(w.conn.display, C.CString("WM_DELETE_WINDOW"), 0)
 	C.XSetWMProtocols(w.conn.display, w.window, &wmDeleteWindow, 1)
 	C.XSelectInput(w.conn.display, w.window, DefaultMask)
 }
-func (w *linuxWindowWrapper) close() {
+func (w *linuxWindowWrapper) Close() {
 	C.XDestroyWindow(w.conn.display, w.window)
 	C.free(unsafe.Pointer(w.title))
 	w.conn.Close()
 	w.conn = nil
 }
-func (w *linuxWindowWrapper) nextEvent() Event {
+func (w *linuxWindowWrapper) NextEvent() Event {
 	var x11Event C.XEvent
 	C.XNextEvent(w.conn.display, &x11Event)
 	return convert(x11Event)
 }
 
-func (w *linuxWindowWrapper) newPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) platformImageWrapper {
+func (w *linuxWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return newLinuxImageWrapper(w, img, offsetX, offsetY)
 }
 

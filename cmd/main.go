@@ -59,6 +59,8 @@ func main() {
 
 	window.Show()
 
+	// ------- Animations -------------------
+
 	drabawles := make([]xgraph.Drawable, 0)
 
 	for i := range points {
@@ -90,6 +92,9 @@ func main() {
 	)
 
 	window.StartAnimation(animation)
+
+	// --------------------------------------
+
 	window.Refresh(30)
 
 	ctx := Context{false, window}

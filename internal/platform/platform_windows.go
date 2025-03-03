@@ -1,6 +1,6 @@
 //go:build windows
 
-package xgraph
+package platform
 
 import (
 	"fmt"
@@ -11,15 +11,15 @@ import (
 
 type windowsWindowWrapper struct{}
 
-func newPlatformWindowWrapper(conf WindowConfig) platformWindowWrapper {
+func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	fmt.Println("Windows window wrapper", conf)
 	return &windowsWindowWrapper{}
 }
 
-func (w *windowsWindowWrapper) show()            {}
-func (w *windowsWindowWrapper) close()           {}
-func (w *windowsWindowWrapper) nextEvent() Event { return nil }
-func (w *windowsWindowWrapper) newPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) platformImageWrapper {
+func (w *windowsWindowWrapper) Show()            {}
+func (w *windowsWindowWrapper) Close()           {}
+func (w *windowsWindowWrapper) NextEvent() Event { return nil }
+func (w *windowsWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return nil
 }
 
@@ -30,8 +30,8 @@ type windowsImageWrapper struct {
 	offsetX, offsetY int
 }
 
-func (xw *windowsImageWrapper) update(rect image.Rectangle) {}
+func (xw *windowsImageWrapper) Update(rect image.Rectangle) {}
 
-func (xw *windowsImageWrapper) delete() {}
+func (xw *windowsImageWrapper) Delete() {}
 
 // ----------------------------------------------------------------------------
