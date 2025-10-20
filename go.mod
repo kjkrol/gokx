@@ -1,3 +1,5 @@
 module github.com/kjkrol/gokx
 
-go 1.23.3
+go 1.24.0
+
+toolchain go1.24.9

@@ -95,9 +95,6 @@ func (p *Pane) Refresh() {
 
 	// Combine all layers onto the offscreen buffer
 	for i := range p.layers {
-		if i > 0 {
-			break
-		}
 		for _, rect := range copiedDirtyRects {
 			combineLayers(p.offscreenImg, p.layers[i], rect)
 		}
@@ -115,26 +112,8 @@ func (p *Pane) Refresh() {
 func combineLayers(target *image.RGBA, layer *Layer, rect *image.Rectangle) {
 	layer.mu.Lock()
 	defer layer.mu.Unlock()
-	// Convert layer's image format if needed
-	convertRGBAToBGRA(layer.Img, rect)
 	// Draw the layer onto the target
 	draw.Draw(target, *rect, layer.Img, rect.Min, draw.Over)
-}
-
-func convertRGBAToBGRA(img *image.RGBA, rect *image.Rectangle) {
-	pix := img.Pix
-	stride := img.Stride
-	startX, startY := rect.Min.X-img.Rect.Min.X, rect.Min.Y-img.Rect.Min.Y
-	endX, endY := rect.Max.X-img.Rect.Min.X, rect.Max.Y-img.Rect.Min.Y
-
-	for y := startY; y < endY; y++ {
-		offset := y*stride + startX*4
-		for x := startX; x < endX; x++ {
-			// Swap R and B channels
-			pix[offset+0], pix[offset+2] = pix[offset+2], pix[offset+0]
-			offset += 4
-		}
-	}
 }
 
 func (p *Pane) Close() {

@@ -79,10 +79,10 @@ func main() {
 				polygon1.Points[i].X += 0
 			}
 
-			// for i := range polygon2.Points {
-			// 	polygon2.Points[i].Y += 0
-			// 	polygon2.Points[i].X += 1
-			// }
+			for i := range polygon2.Points {
+				polygon2.Points[i].Y += 0
+				polygon2.Points[i].X += 1
+			}
 
 			for i := range points {
 				points[i].Cord.X += r.Intn(5) - 2
@@ -149,7 +149,7 @@ func handleEvent(event xgraph.Event, ctx *Context) {
 	case xgraph.ClientMessage:
 		ctx.window.Stop()
 	default:
-		fmt.Printf("Unhandled event type: %d\n", e)
+		// fmt.Printf("Unhandled event type: %d\n", e)
 	}
 }
 

@@ -28,3 +28,4 @@ type CreateNotify struct{}
 type DestroyNotify struct{}
 type ClientMessage struct{}
 type UnexpectedEvent struct{}
+type TimeoutEvent struct{}

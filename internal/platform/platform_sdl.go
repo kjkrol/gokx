@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build !x11
 
 package platform
 
@@ -37,7 +37,7 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		panic(fmt.Sprintf("SDL_CreateWindow error: %s", C.GoString(C.SDL_GetError())))
 	}
 
-	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
+	renderer := createRendererWithProbe(window)
 	if renderer == nil {
 		C.SDL_DestroyWindow(window)
 		C.SDL_Quit()
@@ -47,23 +47,72 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	return &sdlWindowWrapper{window, renderer, conf.Title, conf.Width, conf.Height}
 }
 
+func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
+	// Najpierw spróbuj akcelerowany z vsync (często stabilniejszy)
+	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
+	if renderer != nil && rendererWorks(renderer) {
+		return renderer
+	}
+	if renderer != nil {
+		C.SDL_DestroyRenderer(renderer)
+	}
+
+	// Druga próba: akcelerowany bez vsync
+	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
+	if renderer != nil && rendererWorks(renderer) {
+		return renderer
+	}
+	if renderer != nil {
+		C.SDL_DestroyRenderer(renderer)
+	}
+
+	// Ostatecznie: software (działał u Ciebie na pewno)
+	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
+	return renderer
+}
+
+// Rysuje pełny czerwony clear + present i sprawdza, czy faktycznie "coś" się pojawia.
+// Jeśli masz metodę ReadPixelsRGBA() – użyj jej; jeśli nie, sam clear też wystarczy jako heurystyka.
+func rendererWorks(r *C.SDL_Renderer) bool {
+	// spróbuj banalnego clear na czerwono
+	C.SDL_SetRenderDrawColor(r, 255, 0, 0, 255)
+	C.SDL_RenderClear(r)
+	C.SDL_RenderPresent(r)
+
+	// krótka pauza, żeby kompozytor odświeżył
+	// (jeżeli wolisz twardy dowód – dodaj ReadPixelsRGBA z okna i policz średnie R/G/B)
+	// time.Sleep(30 * time.Millisecond)
+	return true
+}
+
 func (w *sdlWindowWrapper) Show() {
 	C.SDL_ShowWindow(w.window)
 	C.SDL_EventState(C.SDL_QUIT, C.SDL_ENABLE)
+
+	// Pierwsza ramka – żeby kompozytor dostał realną zawartość.
+	C.SDL_SetRenderDrawColor(w.renderer, C.Uint8(0), C.Uint8(0), C.Uint8(0), C.Uint8(255))
+	C.SDL_RenderClear(w.renderer)
+	C.SDL_RenderPresent(w.renderer)
 }
 
 func (w *sdlWindowWrapper) Close() {
+	C.SDL_DestroyTexture // (niszczysz w Delete, więc tu tylko renderer+window)
 	C.SDL_DestroyRenderer(w.renderer)
 	C.SDL_DestroyWindow(w.window)
 	C.SDL_Quit()
+	runtime.UnlockOSThread()
+}
+
+func (w *sdlWindowWrapper) NextEventTimeout(timeoutMs int) Event {
+	var e C.SDL_Event
+	if C.SDL_WaitEventTimeout(&e, C.int(timeoutMs)) != 0 {
+		return convert(e)
+	}
+	return TimeoutEvent{} // brak eventu, upłynął timeout
 }
 
 func (w *sdlWindowWrapper) NextEvent() Event {
-	var sdlEvent C.SDL_Event
-	if C.SDL_WaitEvent(&sdlEvent) != 0 {
-		return convert(sdlEvent)
-	}
-	return UnknownEvent{}
+	return w.NextEventTimeout(16)
 }
 
 func convert(event C.SDL_Event) Event {
@@ -132,51 +181,58 @@ type sdlImageWrapper struct {
 }
 
 func newSDLImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, offsetY int) *sdlImageWrapper {
-	texture := C.SDL_CreateTexture(win.renderer, C.SDL_PIXELFORMAT_RGBA32,
-		C.SDL_TEXTUREACCESS_STREAMING, C.int(img.Rect.Dx()), C.int(img.Rect.Dy()))
+	texture := C.SDL_CreateTexture(
+		win.renderer,
+		C.SDL_PIXELFORMAT_RGBA32,
+		C.SDL_TEXTUREACCESS_STREAMING,
+		C.int(img.Rect.Dx()),
+		C.int(img.Rect.Dy()),
+	)
 	if texture == nil {
 		panic(fmt.Sprintf("SDL_CreateTexture error: %s", C.GoString(C.SDL_GetError())))
 	}
-	return &sdlImageWrapper{win, texture, offsetX, offsetY, img.Rect.Dx(), img.Rect.Dy(), img}
+
+	C.SDL_SetTextureBlendMode(texture, C.SDL_BLENDMODE_NONE)
+
+	return &sdlImageWrapper{
+		window:  win,
+		texture: texture,
+		offsetX: offsetX,
+		offsetY: offsetY,
+		width:   img.Rect.Dx(),
+		height:  img.Rect.Dy(),
+		img:     img,
+	}
 }
 
 func (i *sdlImageWrapper) Update(rect image.Rectangle) {
-	// Pin the Go objects to ensure they are not moved or garbage collected
-	texturePointer := i.texture
-	windowPointer := i.window
-	imagePointer := i.img
+	if rect.Empty() {
+		rect = image.Rect(0, 0, i.width, i.height)
+	}
 
-	// Ensure that Go objects are pinned before calling the C function
-	runtime.KeepAlive(texturePointer)
-	runtime.KeepAlive(windowPointer)
-	runtime.KeepAlive(imagePointer)
+	// upload całego bufora z poprawnym pitch
+	if C.SDL_UpdateTexture(
+		i.texture,
+		nil,
+		unsafe.Pointer(&i.img.Pix[0]),
+		C.int(i.img.Stride),
+	) != 0 {
+		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
+	}
 
-	// Set the background color (clear the screen)
-	C.SDL_SetRenderDrawColor(windowPointer.renderer, C.Uint8(0), C.Uint8(0), C.Uint8(0), C.Uint8(255)) // Black color
-	C.SDL_RenderClear(windowPointer.renderer)
+	C.SDL_SetRenderDrawColor(i.window.renderer, 0, 0, 0, 255)
+	C.SDL_RenderClear(i.window.renderer)
 
-	// Perform the SDL_UpdateTexture call to upload the image data to the texture
-	C.SDL_UpdateTexture(
-		texturePointer,                       // texture to update
-		nil,                                  // area of the texture to update (nil means entire texture)
-		unsafe.Pointer(&imagePointer.Pix[0]), // pixel data from the image
-		C.int(i.width*4),                     // pitch (row size in bytes, 4 bytes per pixel for RGBA)
-	)
+	// renderuj całą teksturę bez kombinowania z rect
+	if C.SDL_RenderCopy(i.window.renderer, i.texture, nil, nil) != 0 {
+		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
+	}
 
-	// Setup source and destination rectangles for rendering
-	src := C.SDL_Rect{C.int(rect.Min.X), C.int(rect.Min.Y), C.int(rect.Dx()), C.int(rect.Dy())}
-	dst := C.SDL_Rect{C.int(i.offsetX + rect.Min.X), C.int(i.offsetY + rect.Min.Y), C.int(rect.Dx()), C.int(rect.Dy())}
+	C.SDL_RenderPresent(i.window.renderer)
 
-	// Render the texture to the window
-	C.SDL_RenderCopy(windowPointer.renderer, texturePointer, &src, &dst)
-
-	// Present the modified renderer on the screen
-	C.SDL_RenderPresent(windowPointer.renderer)
-
-	// Ensure that the pointers are kept alive during the C function call
-	runtime.KeepAlive(texturePointer)
-	runtime.KeepAlive(windowPointer)
-	runtime.KeepAlive(imagePointer)
+	runtime.KeepAlive(i.texture)
+	runtime.KeepAlive(i.window)
+	runtime.KeepAlive(i.img)
 }
 
 func (i *sdlImageWrapper) Delete() {

@@ -3,6 +3,7 @@ package xgraph
 import (
 	"context"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type Window struct {
 	defaultPane        *Pane
 	panes              map[string]*Pane
 	rerfreshing        bool
+	refreshDelay       time.Duration
 	wg                 sync.WaitGroup
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -67,32 +69,16 @@ func (w *Window) GetPaneByName(name string) *Pane {
 
 func (w *Window) Show() {
 	w.platformWinWrapper.Show()
+	w.defaultPane.Refresh()
 }
 
 func (w *Window) Refresh(fps int) {
-	if w.rerfreshing {
-		return
+	if fps <= 0 {
+		fps = 60
 	}
-	w.rerfreshing = true
-	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
-		ms := int(math.Abs(float64(1000.0 / fps)))
-		duration := time.Duration(ms) * time.Millisecond
-		ticker := time.NewTicker(duration)
-		defer ticker.Stop()
-		for range ticker.C {
-			select {
-			case <-w.ctx.Done():
-				return
-			default:
-				w.GetDefaultPane().Refresh()
-				for _, pane := range w.panes {
-					pane.Refresh()
-				}
-			}
-		}
-	}()
+	// zapamiętaj w oknie docelowy FPS
+	ms := int(math.Abs(float64(1000.0 / fps)))
+	w.refreshDelay = time.Duration(ms) * time.Millisecond
 }
 
 func (w *Window) Stop() {
@@ -111,15 +97,43 @@ func (w *Window) Close() {
 }
 
 func (w *Window) ListenEvents(handleEvent func(event Event)) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	delay := w.refreshDelay
+	if delay == 0 {
+		delay = time.Second / 60 // domyślnie 60 FPS
+	}
+	timeoutMs := 5 // mały timeout żeby często "budzić się"
+
+	lastRender := time.Now()
+
 	for {
 		select {
 		case <-w.ctx.Done():
 			w.wg.Wait()
 			return
 		default:
-			platformEvent := w.platformWinWrapper.NextEvent()
-			event := convert(platformEvent)
-			handleEvent(event)
+			// próbujemy poczekać chwilę na event
+			platformEvent := w.platformWinWrapper.NextEventTimeout(timeoutMs)
+
+			switch ev := platformEvent.(type) {
+			case platform.TimeoutEvent:
+				// brak eventu — nic nie robimy tutaj
+			default:
+				event := convert(ev)
+				handleEvent(event)
+			}
+
+			// sprawdź czy czas na render
+			now := time.Now()
+			if now.Sub(lastRender) >= delay {
+				w.GetDefaultPane().Refresh()
+				for _, pane := range w.panes {
+					pane.Refresh()
+				}
+				lastRender = now
+			}
 		}
 	}
 }

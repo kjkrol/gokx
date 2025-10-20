@@ -1,13 +1,11 @@
-//go:build linux
+//go:build linux && x11
 
 package platform
 
 /*
-#cgo CFLAGS: -I/usr/include/X11
 #cgo LDFLAGS: -lX11
 #include <stdlib.h>
 #include <X11/Xlib.h>
-#include <X11/X.h>
 
 void destroyImage(XImage *image) {
     if (image) {
@@ -17,12 +15,18 @@ void destroyImage(XImage *image) {
         free(image);
     }
 }
+static int getConnectionNumber(Display* d) {
+    return ConnectionNumber(d);
+}
+
 */
 import "C"
 
 import (
 	"fmt"
 	"image"
+	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -86,27 +90,11 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	title := C.CString(conf.Title)
 	C.XStoreName(conn.display, window, title)
 
-	return &linuxWindowWrapper{
+	return &x11WindowWrapper{
 		conn:   conn,
 		window: window,
 		title:  title,
 	}
-}
-
-func newLinuxImageWrapper(win *linuxWindowWrapper, img *image.RGBA, offsetX, offsetY int) *linuxImageWrapper {
-	xImage := C.XCreateImage(
-		win.conn.display,
-		C.XDefaultVisual(win.conn.display, win.conn.screen),
-		24,
-		C.ZPixmap,
-		0,
-		(*C.char)(unsafe.Pointer(&img.Pix[0])),
-		C.uint(img.Rect.Dx()),
-		C.uint(img.Rect.Dy()),
-		32,
-		C.int(img.Stride),
-	)
-	return &linuxImageWrapper{win, xImage, offsetX, offsetY}
 }
 
 // ----------------------------------------------------------------------------
@@ -141,61 +129,165 @@ func (c *xConnection) Close() {
 
 // ----------------------------------------------------------------------------
 
-type linuxImageWrapper struct {
-	win              *linuxWindowWrapper
+type x11ImageWrapper struct {
+	win              *x11WindowWrapper
 	xImage           *C.XImage
 	offsetX, offsetY int
+
+	src   *image.RGBA    // źródło (to Twoje img)
+	buf   unsafe.Pointer // C.malloc() – dane dla XImage
+	pitch int            // bajtów na wiersz (Stride)
+	w, h  int            // rozmiar całego obrazu
 }
 
-func (xw *linuxImageWrapper) Update(rect image.Rectangle) {
+func newx11ImageWrapper(win *x11WindowWrapper, img *image.RGBA, offsetX, offsetY int) *x11ImageWrapper {
+	w := img.Rect.Dx()
+	h := img.Rect.Dy()
+	pitch := img.Stride
+	size := C.size_t(h * pitch)
+
+	// C-bufor na piksele dla XImage
+	data := C.malloc(size)
+
+	// XImage wskazuje na C-bufor (NIE na Go slice!)
+	xImage := C.XCreateImage(
+		win.conn.display,
+		C.XDefaultVisual(win.conn.display, win.conn.screen),
+		24, // depth
+		C.ZPixmap,
+		0,               // offset
+		(*C.char)(data), // -> C-bufor
+		C.uint(w), C.uint(h),
+		32,           // bitmap_pad
+		C.int(pitch), // bytes_per_line
+	)
+
+	return &x11ImageWrapper{
+		win: win, xImage: xImage,
+		offsetX: offsetX, offsetY: offsetY,
+		src: img, buf: data, pitch: pitch, w: w, h: h,
+	}
+}
+
+func (xw *x11ImageWrapper) Update(rect image.Rectangle) {
+	// przycinamy rect do granic obrazu
+	r := rect.Intersect(image.Rect(0, 0, xw.w, xw.h))
+	if r.Empty() {
+		return
+	}
+
+	// zmapuj C-bufor na []byte
+	bufSize := xw.h * xw.pitch
+	dst := (*[1 << 30]byte)(xw.buf)[:bufSize:bufSize]
+
+	copyRectRGBAtoBGRA(dst, xw.pitch, xw.src, r)
+
+	// wyślij zmieniony wycinek
 	C.XPutImage(
 		xw.win.conn.display,
 		xw.win.window,
 		xw.win.conn.gc,
 		xw.xImage,
-		C.int(rect.Min.X), C.int(rect.Min.Y),
-		C.int(xw.offsetX+rect.Min.X),
-		C.int(xw.offsetY+rect.Min.Y),
-		C.uint(rect.Dx()),
-		C.uint(rect.Dy()),
+		C.int(r.Min.X), C.int(r.Min.Y), // src_x, src_y
+		C.int(xw.offsetX+r.Min.X), C.int(xw.offsetY+r.Min.Y), // dst_x, dst_y
+		C.uint(r.Dx()), C.uint(r.Dy()),
 	)
 	// C.XFlush(xw.win.conn.display)
 }
 
-func (xw *linuxImageWrapper) Delete() {
-	C.destroyImage(xw.xImage)
-	xw.xImage = nil
+// kopiuje wycinek rect ze źródła RGBA do dst (BGRA) z uwzględnieniem stride’ów
+func copyRectRGBAtoBGRA(dst []byte, dstStride int, src *image.RGBA, rect image.Rectangle) {
+	// przesunięcia względem Rect źródła
+	sx0 := rect.Min.X - src.Rect.Min.X
+	sy0 := rect.Min.Y - src.Rect.Min.Y
+	w := rect.Dx()
+	h := rect.Dy()
+
+	for row := 0; row < h; row++ {
+		sOff := (sy0+row)*src.Stride + sx0*4
+		dOff := (rect.Min.Y+row)*dstStride + rect.Min.X*4
+
+		s := src.Pix[sOff:]
+		d := dst[dOff:]
+
+		// po pikselu: RGBA(s) -> BGRA(d)
+		for x := 0; x < w; x++ {
+			sr := s[4*x+0]
+			sg := s[4*x+1]
+			sb := s[4*x+2]
+			sa := s[4*x+3]
+
+			d[4*x+0] = sb // B
+			d[4*x+1] = sg // G
+			d[4*x+2] = sr // R
+			d[4*x+3] = sa // A (przy depth=24 alpha zwykle ignorowana, ale zostawiamy)
+		}
+	}
+}
+
+func (xw *x11ImageWrapper) Delete() {
+	if xw.xImage != nil {
+		if xw.xImage.data != nil {
+			C.free(unsafe.Pointer(xw.xImage.data)) // najpierw dane
+			xw.xImage.data = nil
+		}
+		C.destroyImage(xw.xImage) // potem struktura XImage
+		xw.xImage = nil
+	}
+	xw.buf = nil
+	xw.src = nil
 }
 
 // ----------------------------------------------------------------------------
 
-type linuxWindowWrapper struct {
+type x11WindowWrapper struct {
 	conn   *xConnection
 	window C.Window
 	title  *C.char
 }
 
-func (w *linuxWindowWrapper) Show() {
+func (w *x11WindowWrapper) Show() {
 	C.XMapWindow(w.conn.display, w.window)
 
 	wmDeleteWindow := C.XInternAtom(w.conn.display, C.CString("WM_DELETE_WINDOW"), 0)
 	C.XSetWMProtocols(w.conn.display, w.window, &wmDeleteWindow, 1)
 	C.XSelectInput(w.conn.display, w.window, DefaultMask)
 }
-func (w *linuxWindowWrapper) Close() {
+func (w *x11WindowWrapper) Close() {
 	C.XDestroyWindow(w.conn.display, w.window)
 	C.free(unsafe.Pointer(w.title))
 	w.conn.Close()
 	w.conn = nil
 }
-func (w *linuxWindowWrapper) NextEvent() Event {
-	var x11Event C.XEvent
-	C.XNextEvent(w.conn.display, &x11Event)
-	return convert(x11Event)
+
+func (w *x11WindowWrapper) NextEventTimeout(timeoutMs int) Event {
+	fd := int(C.getConnectionNumber(w.conn.display))
+
+	// przygotuj timeout
+	tv := syscall.NsecToTimeval((time.Duration(timeoutMs) * time.Millisecond).Nanoseconds())
+
+	var readfds syscall.FdSet
+	FD_SET(fd, &readfds)
+
+	n, err := syscall.Select(fd+1, &readfds, nil, nil, &tv)
+	if err != nil || n == 0 {
+		return TimeoutEvent{} // brak eventu
+	}
+
+	var ev C.XEvent
+	if C.XPending(w.conn.display) > 0 {
+		C.XNextEvent(w.conn.display, &ev)
+		return convert(ev)
+	}
+	return TimeoutEvent{}
 }
 
-func (w *linuxWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
-	return newLinuxImageWrapper(w, img, offsetX, offsetY)
+func (w *x11WindowWrapper) NextEvent() Event {
+	return w.NextEventTimeout(16) // ~60fps, jak SDL
+}
+
+func (w *x11WindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
+	return newx11ImageWrapper(w, img, offsetX, offsetY)
 }
 
 // ----------------------------------------------------------------------------
@@ -242,4 +334,8 @@ func convert(event C.XEvent) Event {
 		// fmt.Printf("Unhandled event type: %d\n", eventType)
 		return UnexpectedEvent{}
 	}
+}
+
+func FD_SET(fd int, p *syscall.FdSet) {
+	p.Bits[fd/64] |= 1 << (uint(fd) % 64)
 }
