@@ -25,6 +25,7 @@ import "C"
 import (
 	"fmt"
 	"image"
+	"runtime"
 	"syscall"
 	"time"
 	"unsafe"
@@ -169,30 +170,39 @@ func newx11ImageWrapper(win *x11WindowWrapper, img *image.RGBA, offsetX, offsetY
 	}
 }
 
-func (xw *x11ImageWrapper) Update(rect image.Rectangle) {
-	// przycinamy rect do granic obrazu
-	r := rect.Intersect(image.Rect(0, 0, xw.w, xw.h))
-	if r.Empty() {
-		return
+func (i *sdlImageWrapper) Update(rect image.Rectangle) {
+	if rect.Empty() {
+		rect = image.Rect(0, 0, i.width, i.height)
 	}
 
-	// zmapuj C-bufor na []byte
-	bufSize := xw.h * xw.pitch
-	dst := (*[1 << 30]byte)(xw.buf)[:bufSize:bufSize]
+	sdlRect := C.SDL_Rect{
+		x: C.int(rect.Min.X),
+		y: C.int(rect.Min.Y),
+		w: C.int(rect.Dx()),
+		h: C.int(rect.Dy()),
+	}
 
-	copyRectRGBAtoBGRA(dst, xw.pitch, xw.src, r)
+	if C.SDL_UpdateTexture(
+		i.texture,
+		&sdlRect,
+		unsafe.Pointer(&i.img.Pix[0]),
+		C.int(i.img.Stride),
+	) != 0 {
+		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
+	}
 
-	// wyślij zmieniony wycinek
-	C.XPutImage(
-		xw.win.conn.display,
-		xw.win.window,
-		xw.win.conn.gc,
-		xw.xImage,
-		C.int(r.Min.X), C.int(r.Min.Y), // src_x, src_y
-		C.int(xw.offsetX+r.Min.X), C.int(xw.offsetY+r.Min.Y), // dst_x, dst_y
-		C.uint(r.Dx()), C.uint(r.Dy()),
-	)
-	// C.XFlush(xw.win.conn.display)
+	C.SDL_SetRenderDrawColor(i.window.renderer, 0, 0, 0, 255)
+	C.SDL_RenderClear(i.window.renderer)
+
+	if C.SDL_RenderCopy(i.window.renderer, i.texture, &sdlRect, &sdlRect) != 0 {
+		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
+	}
+
+	C.SDL_RenderPresent(i.window.renderer)
+
+	runtime.KeepAlive(i.texture)
+	runtime.KeepAlive(i.window)
+	runtime.KeepAlive(i.img)
 }
 
 // kopiuje wycinek rect ze źródła RGBA do dst (BGRA) z uwzględnieniem stride’ów

@@ -5,6 +5,9 @@ package platform
 /*
 #cgo pkg-config: sdl2
 #include <SDL2/SDL.h>
+static inline void my_SDL_DestroyTexture(SDL_Texture* t) {
+    SDL_DestroyTexture(t);
+}
 */
 import "C"
 import (
@@ -96,7 +99,6 @@ func (w *sdlWindowWrapper) Show() {
 }
 
 func (w *sdlWindowWrapper) Close() {
-	C.SDL_DestroyTexture // (niszczysz w Delete, więc tu tylko renderer+window)
 	C.SDL_DestroyRenderer(w.renderer)
 	C.SDL_DestroyWindow(w.window)
 	C.SDL_Quit()
@@ -165,6 +167,8 @@ func convert(event C.SDL_Event) Event {
 	}
 	return UnexpectedEvent{}
 }
+
+// ------------------
 
 func (w *sdlWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return newSDLImageWrapper(w, img, offsetX, offsetY)
@@ -236,7 +240,7 @@ func (i *sdlImageWrapper) Update(rect image.Rectangle) {
 }
 
 func (i *sdlImageWrapper) Delete() {
-	C.SDL_DestroyTexture(i.texture)
+	C.my_SDL_DestroyTexture(i.texture)
 }
 
 type QuitEvent struct{}
