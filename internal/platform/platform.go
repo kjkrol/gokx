@@ -14,7 +14,6 @@ type WindowConfig struct {
 type PlatformWindowWrapper interface {
 	Show()
 	Close()
-	NextEvent() Event
 	NextEventTimeout(timeoutMs int) Event
 	NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper
 }

@@ -44,3 +44,17 @@ Run example
 ```shell
 go run -tags x11 cmd/main.go 
 ```
+
+
+#### WASM
+
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" ./wasm_exec.js
+
+GOOS=js GOARCH=wasm go build -o main.wasm cmd/main.go
+
+python3 -m http.server 8080
+
+http://localhost:8080/index.html
+
+
+

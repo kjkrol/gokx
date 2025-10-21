@@ -74,17 +74,10 @@ func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
 	return renderer
 }
 
-// Rysuje pełny czerwony clear + present i sprawdza, czy faktycznie "coś" się pojawia.
-// Jeśli masz metodę ReadPixelsRGBA() – użyj jej; jeśli nie, sam clear też wystarczy jako heurystyka.
 func rendererWorks(r *C.SDL_Renderer) bool {
-	// spróbuj banalnego clear na czerwono
 	C.SDL_SetRenderDrawColor(r, 255, 0, 0, 255)
 	C.SDL_RenderClear(r)
 	C.SDL_RenderPresent(r)
-
-	// krótka pauza, żeby kompozytor odświeżył
-	// (jeżeli wolisz twardy dowód – dodaj ReadPixelsRGBA z okna i policz średnie R/G/B)
-	// time.Sleep(30 * time.Millisecond)
 	return true
 }
 
@@ -111,10 +104,6 @@ func (w *sdlWindowWrapper) NextEventTimeout(timeoutMs int) Event {
 		return convert(e)
 	}
 	return TimeoutEvent{} // brak eventu, upłynął timeout
-}
-
-func (w *sdlWindowWrapper) NextEvent() Event {
-	return w.NextEventTimeout(16)
 }
 
 func convert(event C.SDL_Event) Event {
@@ -211,14 +200,20 @@ func newSDLImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, offsetY
 
 func (i *sdlImageWrapper) Update(rect image.Rectangle) {
 	if rect.Empty() {
-		rect = image.Rect(0, 0, i.width, i.height)
+		return
 	}
 
-	// upload całego bufora z poprawnym pitch
+	sdlRect := C.SDL_Rect{
+		x: C.int(rect.Min.X),
+		y: C.int(rect.Min.Y),
+		w: C.int(rect.Dx()),
+		h: C.int(rect.Dy()),
+	}
+
 	if C.SDL_UpdateTexture(
 		i.texture,
-		nil,
-		unsafe.Pointer(&i.img.Pix[0]),
+		&sdlRect,
+		unsafe.Pointer(&i.img.Pix[rect.Min.Y*i.img.Stride+rect.Min.X*4]),
 		C.int(i.img.Stride),
 	) != 0 {
 		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
@@ -227,7 +222,6 @@ func (i *sdlImageWrapper) Update(rect image.Rectangle) {
 	C.SDL_SetRenderDrawColor(i.window.renderer, 0, 0, 0, 255)
 	C.SDL_RenderClear(i.window.renderer)
 
-	// renderuj całą teksturę bez kombinowania z rect
 	if C.SDL_RenderCopy(i.window.renderer, i.texture, nil, nil) != 0 {
 		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
 	}

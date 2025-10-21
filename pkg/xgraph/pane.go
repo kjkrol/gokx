@@ -88,31 +88,36 @@ func (p *Pane) Refresh() {
 		return
 	}
 
-	// Clear the offscreen buffer only once
-	for _, rect := range copiedDirtyRects {
-		draw.Draw(p.offscreenImg, *rect, &image.Uniform{C: color.RGBA{0, 0, 0, 0}}, image.Point{}, draw.Src)
+	// oblicz bounding box
+	minRect := *copiedDirtyRects[0]
+	for _, r := range copiedDirtyRects[1:] {
+		minRect = minRect.Union(*r)
 	}
 
-	// Combine all layers onto the offscreen buffer
+	// wyczyść tylko bounding box w offscreen
+	draw.Draw(
+		p.offscreenImg,
+		minRect,
+		&image.Uniform{C: color.RGBA{0, 0, 0, 0}},
+		image.Point{},
+		draw.Src,
+	)
+
+	// wyrenderuj wszystkie warstwy w tym prostokącie
 	for i := range p.layers {
-		for _, rect := range copiedDirtyRects {
-			combineLayers(p.offscreenImg, p.layers[i], rect)
-		}
+		combineLayers(p.offscreenImg, p.layers[i], &minRect)
 	}
 
-	// Copy the offscreen buffer to the main image
-	for _, rect := range copiedDirtyRects {
-		draw.Draw(p.img, *rect, p.offscreenImg, rect.Min, draw.Src)
-	}
+	// skopiuj tylko bounding box do p.img
+	draw.Draw(p.img, minRect, p.offscreenImg, minRect.Min, draw.Src)
 
-	// Update the on-screen image
-	p.platformImgWrapper.Update(p.img.Rect)
+	// update GPU tylko dla tego obszaru
+	p.platformImgWrapper.Update(minRect)
 }
 
 func combineLayers(target *image.RGBA, layer *Layer, rect *image.Rectangle) {
 	layer.mu.Lock()
 	defer layer.mu.Unlock()
-	// Draw the layer onto the target
 	draw.Draw(target, *rect, layer.Img, rect.Min, draw.Over)
 }
 

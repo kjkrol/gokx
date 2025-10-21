@@ -25,7 +25,6 @@ import "C"
 import (
 	"fmt"
 	"image"
-	"runtime"
 	"syscall"
 	"time"
 	"unsafe"
@@ -147,10 +146,8 @@ func newx11ImageWrapper(win *x11WindowWrapper, img *image.RGBA, offsetX, offsetY
 	pitch := img.Stride
 	size := C.size_t(h * pitch)
 
-	// C-bufor na piksele dla XImage
 	data := C.malloc(size)
 
-	// XImage wskazuje na C-bufor (NIE na Go slice!)
 	xImage := C.XCreateImage(
 		win.conn.display,
 		C.XDefaultVisual(win.conn.display, win.conn.screen),
@@ -170,44 +167,29 @@ func newx11ImageWrapper(win *x11WindowWrapper, img *image.RGBA, offsetX, offsetY
 	}
 }
 
-func (i *sdlImageWrapper) Update(rect image.Rectangle) {
-	if rect.Empty() {
-		rect = image.Rect(0, 0, i.width, i.height)
+func (xw *x11ImageWrapper) Update(rect image.Rectangle) {
+	r := rect.Intersect(image.Rect(0, 0, xw.w, xw.h))
+	if r.Empty() {
+		return
 	}
 
-	sdlRect := C.SDL_Rect{
-		x: C.int(rect.Min.X),
-		y: C.int(rect.Min.Y),
-		w: C.int(rect.Dx()),
-		h: C.int(rect.Dy()),
-	}
+	bufSize := xw.h * xw.pitch
+	dst := (*[1 << 30]byte)(xw.buf)[:bufSize:bufSize]
 
-	if C.SDL_UpdateTexture(
-		i.texture,
-		&sdlRect,
-		unsafe.Pointer(&i.img.Pix[0]),
-		C.int(i.img.Stride),
-	) != 0 {
-		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
-	}
+	copyRectRGBAtoBGRA(dst, xw.pitch, xw.src, r)
 
-	C.SDL_SetRenderDrawColor(i.window.renderer, 0, 0, 0, 255)
-	C.SDL_RenderClear(i.window.renderer)
-
-	if C.SDL_RenderCopy(i.window.renderer, i.texture, &sdlRect, &sdlRect) != 0 {
-		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
-	}
-
-	C.SDL_RenderPresent(i.window.renderer)
-
-	runtime.KeepAlive(i.texture)
-	runtime.KeepAlive(i.window)
-	runtime.KeepAlive(i.img)
+	C.XPutImage(
+		xw.win.conn.display,
+		xw.win.window,
+		xw.win.conn.gc,
+		xw.xImage,
+		C.int(r.Min.X), C.int(r.Min.Y), // src_x, src_y
+		C.int(xw.offsetX+r.Min.X), C.int(xw.offsetY+r.Min.Y), // dst_x, dst_y
+		C.uint(r.Dx()), C.uint(r.Dy()),
+	)
 }
 
-// kopiuje wycinek rect ze źródła RGBA do dst (BGRA) z uwzględnieniem stride’ów
 func copyRectRGBAtoBGRA(dst []byte, dstStride int, src *image.RGBA, rect image.Rectangle) {
-	// przesunięcia względem Rect źródła
 	sx0 := rect.Min.X - src.Rect.Min.X
 	sy0 := rect.Min.Y - src.Rect.Min.Y
 	w := rect.Dx()
@@ -238,10 +220,10 @@ func copyRectRGBAtoBGRA(dst []byte, dstStride int, src *image.RGBA, rect image.R
 func (xw *x11ImageWrapper) Delete() {
 	if xw.xImage != nil {
 		if xw.xImage.data != nil {
-			C.free(unsafe.Pointer(xw.xImage.data)) // najpierw dane
+			C.free(unsafe.Pointer(xw.xImage.data))
 			xw.xImage.data = nil
 		}
-		C.destroyImage(xw.xImage) // potem struktura XImage
+		C.destroyImage(xw.xImage)
 		xw.xImage = nil
 	}
 	xw.buf = nil
@@ -273,7 +255,6 @@ func (w *x11WindowWrapper) Close() {
 func (w *x11WindowWrapper) NextEventTimeout(timeoutMs int) Event {
 	fd := int(C.getConnectionNumber(w.conn.display))
 
-	// przygotuj timeout
 	tv := syscall.NsecToTimeval((time.Duration(timeoutMs) * time.Millisecond).Nanoseconds())
 
 	var readfds syscall.FdSet
@@ -281,7 +262,7 @@ func (w *x11WindowWrapper) NextEventTimeout(timeoutMs int) Event {
 
 	n, err := syscall.Select(fd+1, &readfds, nil, nil, &tv)
 	if err != nil || n == 0 {
-		return TimeoutEvent{} // brak eventu
+		return TimeoutEvent{}
 	}
 
 	var ev C.XEvent
@@ -290,10 +271,6 @@ func (w *x11WindowWrapper) NextEventTimeout(timeoutMs int) Event {
 		return convert(ev)
 	}
 	return TimeoutEvent{}
-}
-
-func (w *x11WindowWrapper) NextEvent() Event {
-	return w.NextEventTimeout(16) // ~60fps, jak SDL
 }
 
 func (w *x11WindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
