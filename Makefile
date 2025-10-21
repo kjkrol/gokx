@@ -40,3 +40,5 @@ clear:
 	rm -rf bin/
 	rm -f $(WASM_DIR)/main.wasm
 	rm -f $(WASM_DIR)/wasm_exec.js
+	rm -f $(WASM_DIR)/server.log
+	rm -f $(WASM_DIR)/server

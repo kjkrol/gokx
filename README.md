@@ -6,6 +6,10 @@
 go build -o gokx ./cmd
 # or with x11 wrapper
 go build -tags x11 -o gokx ./cmd
+# or with make
+make build-x11
+# or
+make build-sdl2
 ```
 
 ### Prerequisits
@@ -30,6 +34,8 @@ Run example
 
 ```shell
 go run cmd/main.go
+# or
+make run-sdl2
 ```
 
 #### Linux X11 version
@@ -42,19 +48,18 @@ sudo apt install libx11-dev
 Run example
 
 ```shell
-go run -tags x11 cmd/main.go 
+go run -tags x11 cmd/main.go
+# or
+make run-x11
 ```
 
 
 #### WASM
 
-cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" ./wasm_exec.js
-
-GOOS=js GOARCH=wasm go build -o main.wasm cmd/main.go
-
-python3 -m http.server 8080
-
-http://localhost:8080/index.html
+To run WASM demo execute:
+```shell
+make wasm-serve
+```
 
 
 

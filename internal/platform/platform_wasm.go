@@ -15,20 +15,31 @@ type wasmWindowWrapper struct {
 	events chan Event
 	conf   WindowConfig
 	closed bool
+
+	funcs   []js.Func
+	removes []struct {
+		target js.Value
+		typ    string
+		fn     js.Func
+	}
 }
 
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	doc := js.Global().Get("document")
-
 	doc.Set("title", conf.Title)
 
 	canvas := doc.Call("createElement", "canvas")
 	canvas.Set("width", conf.Width)
 	canvas.Set("height", conf.Height)
-	canvas.Get("style").Set("border", fmt.Sprintf("%dpx solid black", conf.BorderWidth))
-	canvas.Get("style").Set("position", "absolute")
-	canvas.Get("style").Set("left", fmt.Sprintf("%dpx", conf.PositionX))
-	canvas.Get("style").Set("top", fmt.Sprintf("%dpx", conf.PositionY))
+	style := canvas.Get("style")
+	style.Set("border", fmt.Sprintf("%dpx solid black", conf.BorderWidth))
+	style.Set("position", "absolute")
+	style.Set("left", fmt.Sprintf("%dpx", conf.PositionX))
+	style.Set("top", fmt.Sprintf("%dpx", conf.PositionY))
+	style.Set("pointerEvents", "auto")
+
+	// umożliw focus
+	canvas.Call("setAttribute", "tabindex", "0")
 
 	doc.Get("body").Call("appendChild", canvas)
 
@@ -41,14 +52,52 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		conf:   conf,
 	}
 
-	// event listeners
+	// helper do listenerów
 	addEventListener := func(target js.Value, event string, f func(js.Value)) {
-		target.Call("addEventListener", event, js.FuncOf(func(this js.Value, args []js.Value) any {
-			f(args[0])
+		fn := js.FuncOf(func(this js.Value, args []js.Value) any {
+			if len(args) == 0 {
+				return nil
+			}
+			e := args[0]
+			e.Call("preventDefault")
+			e.Call("stopPropagation")
+			f(e)
 			return nil
-		}))
+		})
+		target.Call("addEventListener", event, fn)
+		w.funcs = append(w.funcs, fn)
+		w.removes = append(w.removes, struct {
+			target js.Value
+			typ    string
+			fn     js.Func
+		}{target: target, typ: event, fn: fn})
 	}
 
+	// pomocnik: współrzędne względem canvasa
+	getCanvasCoords := func(e js.Value) (int, int) {
+		rect := w.canvas.Call("getBoundingClientRect")
+		cw := float64(w.canvas.Get("width").Int())
+		ch := float64(w.canvas.Get("height").Int())
+		rw := rect.Get("width").Float()
+		rh := rect.Get("height").Float()
+
+		scaleX := 1.0
+		scaleY := 1.0
+		if rw != 0 {
+			scaleX = cw / rw
+		}
+		if rh != 0 {
+			scaleY = ch / rh
+		}
+
+		clientX := e.Get("clientX").Float()
+		clientY := e.Get("clientY").Float()
+		x := (clientX - rect.Get("left").Float()) * scaleX
+		y := (clientY - rect.Get("top").Float()) * scaleY
+		return int(x + 0.5), int(y + 0.5)
+	}
+
+	// klawiatura
 	addEventListener(doc, "keydown", func(e js.Value) {
 		key := e.Get("key").String()
 		w.events <- KeyPress{Code: 0, Label: key}
@@ -57,30 +106,53 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		key := e.Get("key").String()
 		w.events <- KeyRelease{Code: 0, Label: key}
 	})
+
+	// mapowanie DOM -> SDL/X11 (0,1,2) -> (1,2,3)
+	mapMouseButton := func(e js.Value) uint32 {
+		switch e.Get("button").Int() {
+		case 0:
+			return 1 // left
+		case 1:
+			return 2 // middle
+		case 2:
+			return 3 // right
+		default:
+			// na wszelki wypadek: przesuwamy o +1
+			return uint32(e.Get("button").Int() + 1)
+		}
+	}
+
+	// mysz
 	addEventListener(canvas, "mousedown", func(e js.Value) {
+		x, y := getCanvasCoords(e)
 		w.events <- ButtonPress{
-			Button: uint32(e.Get("button").Int()),
-			X:      e.Get("offsetX").Int(),
-			Y:      e.Get("offsetY").Int(),
-		}
-	})
-	addEventListener(canvas, "mouseup", func(e js.Value) {
-		w.events <- ButtonRelease{
-			Button: uint32(e.Get("button").Int()),
-			X:      e.Get("offsetX").Int(),
-			Y:      e.Get("offsetY").Int(),
-		}
-	})
-	addEventListener(canvas, "mousemove", func(e js.Value) {
-		w.events <- MotionNotify{
-			X: e.Get("offsetX").Int(),
-			Y: e.Get("offsetY").Int(),
+			Button: mapMouseButton(e), // <— TU
+			X:      x,
+			Y:      y,
 		}
 	})
 
-	// emit "create window" event
+	addEventListener(doc, "mouseup", func(e js.Value) {
+		x, y := getCanvasCoords(e)
+		w.events <- ButtonRelease{
+			Button: mapMouseButton(e), // <— TU
+			X:      x,
+			Y:      y,
+		}
+	})
+
+	addEventListener(canvas, "mousemove", func(e js.Value) {
+		x, y := getCanvasCoords(e)
+		w.events <- MotionNotify{X: x, Y: y} // tu bez zmian
+	})
+
+	// wyłącz menu kontekstowe
+	addEventListener(canvas, "contextmenu", func(e js.Value) {})
+
+	// fokus i CreateNotify
 	go func() {
 		time.Sleep(10 * time.Millisecond)
+		canvas.Call("focus")
 		w.events <- CreateNotify{}
 	}()
 
@@ -88,15 +160,27 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 }
 
 func (w *wasmWindowWrapper) Show() {
-	// pierwsza ramka (czarne tło)
+	w.ctx.Set("fillStyle", "#000000")
 	w.ctx.Call("fillRect", 0, 0, w.canvas.Get("width").Int(), w.canvas.Get("height").Int())
 }
 
 func (w *wasmWindowWrapper) Close() {
-	if !w.closed {
-		w.closed = true
-		w.events <- DestroyNotify{}
+	if w.closed {
+		return
 	}
+	w.closed = true
+
+	// usuń listenery
+	for _, r := range w.removes {
+		r.target.Call("removeEventListener", r.typ, r.fn)
+	}
+	for i := range w.funcs {
+		w.funcs[i].Release()
+	}
+	w.funcs = nil
+	w.removes = nil
+
+	w.events <- DestroyNotify{}
 }
 
 func (w *wasmWindowWrapper) NextEventTimeout(timeoutMs int) Event {
@@ -137,5 +221,5 @@ func (i *wasmImageWrapper) Update(rect image.Rectangle) {
 }
 
 func (i *wasmImageWrapper) Delete() {
-	// nic do sprzątania, GC załatwi
+	// nic do sprzątania — GC + Close() zrobi swoje
 }
