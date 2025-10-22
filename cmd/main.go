@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"image"
 	"image/color"
 	"math/rand"
 	"time"
 
+	"github.com/kjkrol/gokg/pkg/geometry"
 	"github.com/kjkrol/gokx/pkg/xgraph"
 )
 
@@ -32,61 +32,75 @@ func main() {
 
 	layer2 := window.GetDefaultPane().GetLayer(2)
 
-	polygon1 := xgraph.Polygon{
-		Points:      []image.Point{{150, 100}, {200, 200}, {100, 200}},
-		FillColor:   color.RGBA{0, 255, 0, 255},
-		BorderColor: color.RGBA{0, 0, 255, 255},
+	polygon1 := &xgraph.DrawableSpatial{
+		Shape: geometry.NewPolygon(
+			geometry.Vec[int]{X: 150, Y: 100},
+			geometry.Vec[int]{X: 200, Y: 200},
+			geometry.Vec[int]{X: 100, Y: 200},
+		),
+		Style: xgraph.SpatialStyle{
+			Fill:   color.RGBA{0, 255, 0, 255},
+			Stroke: color.RGBA{0, 0, 255, 255},
+		},
 	}
 
-	polygon2 := xgraph.Polygon{
-		Points:      []image.Point{{100, 100}, {200, 100}, {200, 200}, {100, 200}},
-		FillColor:   color.RGBA{0, 255, 0, 255},
-		BorderColor: color.RGBA{0, 0, 255, 255},
+	polygon2 := &xgraph.DrawableSpatial{
+		Shape: geometry.NewRectangle(
+			geometry.Vec[int]{X: 100, Y: 100},
+			geometry.Vec[int]{X: 200, Y: 200},
+		),
+		Style: xgraph.SpatialStyle{
+			Fill:   color.RGBA{0, 255, 0, 255},
+			Stroke: color.RGBA{0, 0, 255, 255},
+		},
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	points := make([]xgraph.Point, 1000)
-	for i := range points {
+	pointVectors := make([]*geometry.Vec[int], 1000)
+	pointDrawables := make([]*xgraph.DrawableSpatial, 0, 1000)
+	for i := range pointVectors {
 		randX := r.Intn(800)
 		randY := r.Intn(800)
-		points[i] = xgraph.Point{Cord: image.Pt(randX, randY), Color: color.White}
-		points[i].Draw(layer2)
+		vec := &geometry.Vec[int]{X: randX, Y: randY}
+		pointVectors[i] = vec
+		drawable := &xgraph.DrawableSpatial{
+			Shape: vec,
+			Style: xgraph.SpatialStyle{Stroke: color.White},
+		}
+		pointDrawables = append(pointDrawables, drawable)
+		layer2.Draw(drawable)
 	}
 
-	layer2.Draw(&polygon1)
+	layer2.Draw(polygon1)
 
-	layer2.Draw(&polygon2)
+	layer2.Draw(polygon2)
 
 	window.Show()
 
 	// ------- Animations -------------------
 
-	drabawles := make([]xgraph.Drawable, 0)
+	plane := geometry.NewBoundedPlane(800, 800)
 
-	for i := range points {
-		drabawles = append(drabawles, &points[i])
-	}
-	drabawles = append(drabawles, &polygon1)
-	drabawles = append(drabawles, &polygon2)
+	drawables := make([]*xgraph.DrawableSpatial, 0, len(pointDrawables)+2)
+	drawables = append(drawables, pointDrawables...)
+	drawables = append(drawables, polygon1, polygon2)
 
 	animation := xgraph.NewAnimation(
 		layer2,
 		50*time.Millisecond,
-		drabawles,
+		drawables,
 		func() {
-			for i := range polygon1.Points {
-				polygon1.Points[i].Y += 1
-				polygon1.Points[i].X += 0
+			for _, v := range polygon1.Shape.Vertices() {
+				plane.Translate(v, geometry.Vec[int]{X: 10, Y: 0})
 			}
 
-			for i := range polygon2.Points {
-				polygon2.Points[i].Y += 0
-				polygon2.Points[i].X += 1
+			for _, v := range polygon2.Shape.Vertices() {
+				plane.Translate(v, geometry.Vec[int]{X: 0, Y: 10})
 			}
 
-			for i := range points {
-				points[i].Cord.X += r.Intn(5) - 2
-				points[i].Cord.Y += r.Intn(5) - 2
+			for _, vec := range pointVectors {
+				vec.X += r.Intn(5) - 2
+				vec.Y += r.Intn(5) - 2
 			}
 		},
 	)
@@ -157,6 +171,10 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	point := xgraph.Point{Cord: image.Pt(px, py), Color: color.White}
-	layer1.Draw(&point)
+	vec := &geometry.Vec[int]{X: px, Y: py}
+	drawable := &xgraph.DrawableSpatial{
+		Shape: vec,
+		Style: xgraph.SpatialStyle{Stroke: color.White},
+	}
+	layer1.Draw(drawable)
 }

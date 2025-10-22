@@ -25,13 +25,13 @@ func (l *Layer) SetBackground(color color.Color) {
 	draw.Draw(l.Img, l.Img.Bounds(), &image.Uniform{color}, image.Point{}, draw.Src)
 }
 
-func (l *Layer) Draw(drawable Drawable) {
+func (l *Layer) Draw(drawable *DrawableSpatial) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	drawable.Draw(l)
 }
 
-func (l *Layer) Erase(drawable Drawable) {
+func (l *Layer) Erase(drawable *DrawableSpatial) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	drawable.Erase(l)

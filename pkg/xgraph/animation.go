@@ -9,12 +9,12 @@ import (
 type Animation struct {
 	Layer     *Layer
 	Duration  time.Duration
-	Drawables []Drawable
+	Drawables []*DrawableSpatial
 	Evolve    func()
 	runnung   bool
 }
 
-func NewAnimation(layer *Layer, duration time.Duration, drawables []Drawable, evolve func()) *Animation {
+func NewAnimation(layer *Layer, duration time.Duration, drawables []*DrawableSpatial, evolve func()) *Animation {
 	return &Animation{
 		Layer:     layer,
 		Duration:  duration,

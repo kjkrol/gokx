@@ -29,3 +29,6 @@ cmd/wasm-demo/server.log
 *.swp
 *.swo
 .DS_Store
+
+# Go cache
+.gocache
