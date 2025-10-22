@@ -32,23 +32,25 @@ func main() {
 
 	layer2 := window.GetDefaultPane().GetLayer(2)
 
+	polygon1Shape := geometry.NewPolygon(
+		geometry.Vec[int]{X: 150, Y: 100},
+		geometry.Vec[int]{X: 200, Y: 200},
+		geometry.Vec[int]{X: 100, Y: 200},
+	)
 	polygon1 := &xgraph.DrawableSpatial{
-		Shape: geometry.NewPolygon(
-			geometry.Vec[int]{X: 150, Y: 100},
-			geometry.Vec[int]{X: 200, Y: 200},
-			geometry.Vec[int]{X: 100, Y: 200},
-		),
+		Shape: &polygon1Shape,
 		Style: xgraph.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
 		},
 	}
 
+	rectShape := geometry.NewRectangle(
+		geometry.Vec[int]{X: 100, Y: 100},
+		geometry.Vec[int]{X: 200, Y: 200},
+	)
 	polygon2 := &xgraph.DrawableSpatial{
-		Shape: geometry.NewRectangle(
-			geometry.Vec[int]{X: 100, Y: 100},
-			geometry.Vec[int]{X: 200, Y: 200},
-		),
+		Shape: &rectShape,
 		Style: xgraph.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
@@ -79,7 +81,7 @@ func main() {
 
 	// ------- Animations -------------------
 
-	plane := geometry.NewBoundedPlane(800, 800)
+	plane := geometry.NewCyclicBoundedPlane(800, 800)
 
 	drawables := make([]*xgraph.DrawableSpatial, 0, len(pointDrawables)+2)
 	drawables = append(drawables, pointDrawables...)
@@ -91,16 +93,15 @@ func main() {
 		drawables,
 		func() {
 			for _, v := range polygon1.Shape.Vertices() {
-				plane.Translate(v, geometry.Vec[int]{X: 10, Y: 0})
+				plane.Translate(v, geometry.Vec[int]{X: -1, Y: 0})
 			}
 
 			for _, v := range polygon2.Shape.Vertices() {
-				plane.Translate(v, geometry.Vec[int]{X: 0, Y: 10})
+				plane.Translate(v, geometry.Vec[int]{X: 0, Y: -1})
 			}
 
-			for _, vec := range pointVectors {
-				vec.X += r.Intn(5) - 2
-				vec.Y += r.Intn(5) - 2
+			for _, v := range pointVectors {
+				plane.Translate(v, geometry.Vec[int]{X: r.Intn(5) - 2, Y: r.Intn(5) - 2})
 			}
 		},
 	)
