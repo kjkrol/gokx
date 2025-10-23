@@ -8,6 +8,9 @@ package platform
 static inline void my_SDL_DestroyTexture(SDL_Texture* t) {
     SDL_DestroyTexture(t);
 }
+static inline SDL_Surface* my_SDL_GetWindowSurface(SDL_Window* window) {
+    return SDL_GetWindowSurface(window);
+}
 */
 import "C"
 import (
@@ -184,7 +187,6 @@ func (w *sdlWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, off
 
 type sdlImageWrapper struct {
 	window  *sdlWindowWrapper
-	texture *C.SDL_Texture
 	offsetX int
 	offsetY int
 	width   int
@@ -193,22 +195,8 @@ type sdlImageWrapper struct {
 }
 
 func newSDLImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, offsetY int) *sdlImageWrapper {
-	texture := C.SDL_CreateTexture(
-		win.renderer,
-		C.SDL_PIXELFORMAT_RGBA32,
-		C.SDL_TEXTUREACCESS_STREAMING,
-		C.int(img.Rect.Dx()),
-		C.int(img.Rect.Dy()),
-	)
-	if texture == nil {
-		panic(fmt.Sprintf("SDL_CreateTexture error: %s", C.GoString(C.SDL_GetError())))
-	}
-
-	C.SDL_SetTextureBlendMode(texture, C.SDL_BLENDMODE_NONE)
-
 	return &sdlImageWrapper{
 		window:  win,
-		texture: texture,
 		offsetX: offsetX,
 		offsetY: offsetY,
 		width:   img.Rect.Dx(),
@@ -222,31 +210,91 @@ func (i *sdlImageWrapper) Update(rect image.Rectangle) {
 		return
 	}
 
-	if C.SDL_UpdateTexture(
-		i.texture,
-		nil,
-		unsafe.Pointer(&i.img.Pix[0]),
-		C.int(i.img.Stride),
-	) != 0 {
-		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
+	rect = rect.Intersect(i.img.Rect)
+	if rect.Empty() {
+		return
 	}
 
-	C.SDL_SetRenderDrawColor(i.window.renderer, 0, 0, 0, 255)
-	C.SDL_RenderClear(i.window.renderer)
-
-	if C.SDL_RenderCopy(i.window.renderer, i.texture, nil, nil) != 0 {
-		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
+	surface := C.my_SDL_GetWindowSurface(i.window.window)
+	if surface == nil {
+		return
 	}
 
-	C.SDL_RenderPresent(i.window.renderer)
+	if C.SDL_LockSurface(surface) != 0 {
+		fmt.Println("SDL_LockSurface error:", C.GoString(C.SDL_GetError()))
+		return
+	}
 
-	runtime.KeepAlive(i.texture)
+	copyRectRGBAtoSurface(surface, i.img, rect, i.offsetX, i.offsetY)
+
+	C.SDL_UnlockSurface(surface)
+
+	dstRect := C.SDL_Rect{
+		x: C.int(rect.Min.X + i.offsetX),
+		y: C.int(rect.Min.Y + i.offsetY),
+		w: C.int(rect.Dx()),
+		h: C.int(rect.Dy()),
+	}
+
+	C.SDL_UpdateWindowSurfaceRects(i.window.window, &dstRect, 1)
+
 	runtime.KeepAlive(i.window)
 	runtime.KeepAlive(i.img)
 }
 
 func (i *sdlImageWrapper) Delete() {
-	C.my_SDL_DestroyTexture(i.texture)
+	// nothing to free for surface path
+}
+
+func copyRectRGBAtoSurface(surface *C.SDL_Surface, src *image.RGBA, rect image.Rectangle, offsetX, offsetY int) {
+	if surface == nil || src == nil {
+		return
+	}
+
+	dstWidth := int(surface.w)
+	dstHeight := int(surface.h)
+	dstBounds := image.Rect(0, 0, dstWidth, dstHeight)
+	windowRect := image.Rect(rect.Min.X+offsetX, rect.Min.Y+offsetY, rect.Max.X+offsetX, rect.Max.Y+offsetY)
+	windowRect = windowRect.Intersect(dstBounds)
+	if windowRect.Empty() {
+		return
+	}
+
+	srcStartX := windowRect.Min.X - offsetX + src.Rect.Min.X
+	srcStartY := windowRect.Min.Y - offsetY + src.Rect.Min.Y
+	width := windowRect.Dx()
+	height := windowRect.Dy()
+
+	bytesPerPixel := int(surface.format.BytesPerPixel)
+	if bytesPerPixel != 4 {
+		return
+	}
+
+	dstPitch := int(surface.pitch)
+	dstData := (*[1 << 30]byte)(unsafe.Pointer(surface.pixels))[: dstPitch*dstHeight : dstPitch*dstHeight]
+	srcStride := src.Stride
+
+	for y := 0; y < height; y++ {
+		srcOffset := (srcStartY + y - src.Rect.Min.Y) * srcStride
+		srcOffset += (srcStartX - src.Rect.Min.X) * 4
+		dstOffset := (windowRect.Min.Y + y) * dstPitch
+		dstOffset += windowRect.Min.X * bytesPerPixel
+
+		for x := 0; x < width; x++ {
+			sr := src.Pix[srcOffset+0]
+			sg := src.Pix[srcOffset+1]
+			sb := src.Pix[srcOffset+2]
+			sa := src.Pix[srcOffset+3]
+
+			dstIdx := dstOffset + x*bytesPerPixel
+			dstData[dstIdx+0] = sb
+			dstData[dstIdx+1] = sg
+			dstData[dstIdx+2] = sr
+			dstData[dstIdx+3] = sa
+
+			srcOffset += 4
+		}
+	}
 }
 
 type QuitEvent struct{}
