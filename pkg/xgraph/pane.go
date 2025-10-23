@@ -20,7 +20,7 @@ type Pane struct {
 	offscreenImg       *image.RGBA
 	dirtyBounds        image.Rectangle
 	dirty              bool
-	mu                 sync.Mutex // Mutex to protect the dirty flag
+	mu                 sync.Mutex
 	compMu             sync.Mutex
 	layerComposites    []*image.RGBA
 	compositeDirty     []bool
@@ -46,7 +46,7 @@ func newPane(
 		img:                img,
 		offscreenImg:       offscreenImg,
 	}
-	layer := NewLayer(conf.Width, conf.Height, &pane)
+	layer := NewLayerDefault(conf.Width, conf.Height, &pane)
 	layer.idx = 0
 	layers[0] = &layer
 	pane.layerComposites[0] = offscreenImg
@@ -57,7 +57,7 @@ func (p *Pane) AddLayer(num int) bool {
 	if num < 0 || num > len(p.layers) {
 		return false
 	}
-	layer := NewLayer(p.Config.Width, p.Config.Height, p)
+	layer := NewLayerDefault(p.Config.Width, p.Config.Height, p)
 	layer.idx = len(p.layers)
 	p.layers = append(p.layers, &layer)
 
@@ -93,10 +93,7 @@ func (p *Pane) GetLayer(num int) *Layer {
 func (p *Pane) MarkToRefresh(rect *image.Rectangle) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// Intersect rect with p.img.Rect to ensure it is within bounds
 	clippedRect := rect.Intersect(p.img.Rect)
-
-	// Only add the rectangle if it still has non-zero size
 	if !clippedRect.Empty() {
 		if !p.dirty {
 			p.dirtyBounds = clippedRect
@@ -137,8 +134,8 @@ func (p *Pane) Refresh() {
 
 	p.compMu.Lock()
 	start := len(p.layerComposites)
-	for i, dirty := range p.compositeDirty {
-		if dirty {
+	for i, needs := range p.compositeDirty {
+		if needs {
 			start = i
 			break
 		}
@@ -151,10 +148,7 @@ func (p *Pane) Refresh() {
 	finalComposite := p.ensureComposite(len(p.layerComposites) - 1)
 	p.compMu.Unlock()
 
-	// skopiuj tylko bounding box do p.img
 	draw.Draw(p.img, minRect, finalComposite, minRect.Min, draw.Src)
-
-	// update GPU tylko dla tego obszaru
 	p.platformImgWrapper.Update(minRect)
 }
 
@@ -177,23 +171,34 @@ func (p *Pane) rebuildComposites(rect image.Rectangle, start int) {
 		start = 0
 	}
 	for i := start; i < len(p.layers); i++ {
+		layer := p.layers[i]
+		if layer == nil {
+			continue
+		}
+		layer.render(rect)
+
 		dst := p.ensureComposite(i)
 		if dst == nil {
 			continue
 		}
+
+		clipped := rect.Intersect(dst.Bounds())
+		if clipped.Empty() {
+			p.compositeDirty[i] = false
+			continue
+		}
+
 		if i == 0 {
-			layer := p.layers[0]
 			layer.mu.Lock()
-			draw.Draw(dst, rect, layer.Img, rect.Min, draw.Src)
+			draw.Draw(dst, clipped, layer.Img, clipped.Min, draw.Src)
 			layer.mu.Unlock()
 		} else {
 			prev := p.ensureComposite(i - 1)
 			if prev != nil {
-				draw.Draw(dst, rect, prev, rect.Min, draw.Src)
+				draw.Draw(dst, clipped, prev, clipped.Min, draw.Src)
 			}
-			layer := p.layers[i]
 			layer.mu.Lock()
-			draw.Draw(dst, rect, layer.Img, rect.Min, draw.Over)
+			draw.Draw(dst, clipped, layer.Img, clipped.Min, draw.Over)
 			layer.mu.Unlock()
 		}
 		p.compositeDirty[i] = false

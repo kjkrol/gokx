@@ -58,24 +58,22 @@ func main() {
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	pointVectors := make([]*geometry.Vec[int], 1000)
 	pointDrawables := make([]*xgraph.DrawableSpatial, 0, 1000)
-	for i := range pointVectors {
+	for i := 0; i < 1000; i++ {
 		randX := r.Intn(800)
 		randY := r.Intn(800)
 		vec := &geometry.Vec[int]{X: randX, Y: randY}
-		pointVectors[i] = vec
 		drawable := &xgraph.DrawableSpatial{
 			Shape: vec,
 			Style: xgraph.SpatialStyle{Stroke: color.White},
 		}
 		pointDrawables = append(pointDrawables, drawable)
-		layer2.Draw(drawable)
+		layer2.AddDrawable(drawable)
 	}
 
-	layer2.Draw(polygon1)
+	layer2.AddDrawable(polygon1)
 
-	layer2.Draw(polygon2)
+	layer2.AddDrawable(polygon2)
 
 	window.Show()
 
@@ -92,11 +90,21 @@ func main() {
 		50*time.Millisecond,
 		drawables,
 		func() {
-			plane.TranslateSpatial(polygon1.Shape, geometry.Vec[int]{X: -1, Y: -1})
-			plane.TranslateSpatial(polygon2.Shape, geometry.Vec[int]{X: 0, Y: -1})
+			polygon1.Update(func(shape geometry.Spatial[int]) {
+				plane.TranslateSpatial(shape, geometry.Vec[int]{X: 1, Y: 1})
+			})
+			polygon2.Update(func(shape geometry.Spatial[int]) {
+				plane.TranslateSpatial(shape, geometry.Vec[int]{X: 0, Y: -1})
+			})
 
-			for _, v := range pointVectors {
-				plane.Translate(v, geometry.Vec[int]{X: r.Intn(5) - 2, Y: r.Intn(5) - 2})
+			for _, drawable := range pointDrawables {
+				dx := r.Intn(5) - 2
+				dy := r.Intn(5) - 2
+				drawable.Update(func(shape geometry.Spatial[int]) {
+					if vec, ok := shape.(*geometry.Vec[int]); ok {
+						plane.Translate(vec, geometry.Vec[int]{X: dx, Y: dy})
+					}
+				})
 			}
 		},
 	)
@@ -105,7 +113,7 @@ func main() {
 
 	// --------------------------------------
 
-	window.Refresh(30)
+	window.RefreshRate(120)
 
 	ctx := Context{false, window}
 	window.ListenEvents(func(event xgraph.Event) {
@@ -158,6 +166,8 @@ func handleEvent(event xgraph.Event, ctx *Context) {
 		ctx.window.Stop()
 	case xgraph.ClientMessage:
 		ctx.window.Stop()
+	case xgraph.MouseWheel:
+		fmt.Printf("Mouse wheel dx=%.2f dy=%.2f at %d,%d\n", e.DeltaX, e.DeltaY, e.X, e.Y)
 	default:
 		// fmt.Printf("Unhandled event type: %d\n", e)
 	}
@@ -172,5 +182,5 @@ func drawDots(wX, wY int, ctx *Context) {
 		Shape: vec,
 		Style: xgraph.SpatialStyle{Stroke: color.White},
 	}
-	layer1.Draw(drawable)
+	layer1.AddDrawable(drawable)
 }

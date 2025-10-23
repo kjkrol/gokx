@@ -146,6 +146,22 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		w.events <- MotionNotify{X: x, Y: y} // tu bez zmian
 	})
 
+	addEventListener(canvas, "wheel", func(e js.Value) {
+		deltaX := -e.Get("deltaX").Float()
+		deltaY := -e.Get("deltaY").Float()
+		if e.Get("deltaMode").Int() == 0 {
+			deltaX /= 120.0
+			deltaY /= 120.0
+		}
+		x, y := getCanvasCoords(e)
+		w.events <- MouseWheel{
+			DeltaX: deltaX,
+			DeltaY: deltaY,
+			X:      x,
+			Y:      y,
+		}
+	})
+
 	// wyłącz menu kontekstowe
 	addEventListener(canvas, "contextmenu", func(e js.Value) {})
 

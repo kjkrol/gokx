@@ -27,5 +27,10 @@ type LeaveNotify struct{}
 type CreateNotify struct{}
 type DestroyNotify struct{}
 type ClientMessage struct{}
+type MouseWheel struct {
+	DeltaX float64
+	DeltaY float64
+	X, Y   int
+}
 type UnexpectedEvent struct{}
 type TimeoutEvent struct{}

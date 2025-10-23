@@ -16,133 +16,136 @@ type SpatialStyle struct {
 type DrawableSpatial struct {
 	Shape geometry.Spatial[int]
 	Style SpatialStyle
+	layer *Layer
 }
 
-var transparentColor = color.RGBA{0, 0, 0, 0}
+var (
+	transparentColor = color.RGBA{0, 0, 0, 0}
+	transparentFill  = image.NewUniform(transparentColor)
+)
 
-func (d *DrawableSpatial) Draw(layer *Layer) {
-	if d == nil || d.Shape == nil {
+func (d *DrawableSpatial) Update(mutator func(shape geometry.Spatial[int])) {
+	if d == nil || mutator == nil {
 		return
 	}
-	d.drawShape(layer, d.Shape)
-	fragments := d.Shape.Fragments()
-	if len(fragments) == 0 {
+	if d.layer == nil {
+		mutator(d.Shape)
 		return
 	}
+	d.layer.ModifyDrawable(d, func() {
+		mutator(d.Shape)
+	})
+}
+
+func (d *DrawableSpatial) attach(layer *Layer) {
+	d.layer = layer
+}
+
+func (d *DrawableSpatial) detach() {
+	d.layer = nil
+}
+
+func paintDrawable(img *image.RGBA, drawable *DrawableSpatial) {
+	if drawable == nil || drawable.Shape == nil {
+		return
+	}
+	paintShape(img, drawable.Style, drawable.Shape)
+	fragments := drawable.Shape.Fragments()
 	for _, fragment := range fragments {
 		if fragment == nil {
 			continue
 		}
-		d.drawShape(layer, fragment)
+		paintShape(img, drawable.Style, fragment)
 	}
 }
 
-func (d *DrawableSpatial) Erase(layer *Layer) {
-	original := d.Style
-	d.Style = SpatialStyle{transparentColor, transparentColor}
-	d.Draw(layer)
-	d.Style = original
-}
-
-func (d *DrawableSpatial) drawShape(layer *Layer, shape geometry.Spatial[int]) {
+func paintShape(img *image.RGBA, style SpatialStyle, shape geometry.Spatial[int]) {
 	switch s := shape.(type) {
 	case *geometry.Vec[int]:
-		drawSpatialVec(layer, *s, d.Style)
+		point := rasterizeVec(*s)
+		paintVec(img, point, style)
 	case *geometry.Line[int]:
-		drawSpatialLine(layer, s.Start, s.End, d.Style)
+		points := rasterizeLine(vecToImagePoint(s.Start), vecToImagePoint(s.End))
+		paintLine(img, points, style)
 	case *geometry.Polygon[int]:
-		drawSpatialPolygon(layer, s.Points(), d.Style)
+		points := rasterizePolygon(s.Points())
+		paintPolygon(img, points, style)
 	case *geometry.Rectangle[int]:
-		drawSpatialRectangle(layer, *s, d.Style)
+		points := rasterizeRectangle(*s)
+		paintPolygon(img, points, style)
 	default:
-		drawSpatialRectangle(layer, shape.Bounds(), d.Style)
+		points := rasterizeRectangle(shape.Bounds())
+		paintPolygon(img, points, style)
 	}
-	markSpatial(layer, shape)
 }
 
-func drawSpatialVec(layer *Layer, v geometry.Vec[int], style SpatialStyle) {
+func rasterizeVec(v geometry.Vec[int]) image.Point {
+	return vecToImagePoint(v)
+}
+
+func paintVec(img *image.RGBA, point image.Point, style SpatialStyle) {
 	if style.Stroke == nil {
 		return
 	}
-	drawPoint(layer.Img, vecToImagePoint(v), style.Stroke)
+	img.Set(point.X, point.Y, style.Stroke)
 }
 
-func drawSpatialLine(layer *Layer, start, end geometry.Vec[int], style SpatialStyle) {
-	if style.Stroke == nil {
-		return
-	}
-	drawLine(layer.Img, vecToImagePoint(start), vecToImagePoint(end), style.Stroke)
+func rasterizeLine(start, end image.Point) []image.Point {
+	return bresenhamLine(start, end)
 }
 
-func drawSpatialPolygon(layer *Layer, vertices []geometry.Vec[int], style SpatialStyle) {
-	if len(vertices) < 3 {
+func paintLine(img *image.RGBA, points []image.Point, style SpatialStyle) {
+	if style.Stroke == nil || len(points) == 0 {
 		return
 	}
-	points := vecsToImagePoints(vertices)
+	paintLinePixels(img, points, style.Stroke)
+}
+
+func rasterizePolygon(vertices []geometry.Vec[int]) []image.Point {
+	if len(vertices) == 0 {
+		return nil
+	}
+	return vecsToImagePoints(vertices)
+}
+
+func paintPolygon(img *image.RGBA, points []image.Point, style SpatialStyle) {
+	if len(points) < 3 {
+		return
+	}
 	if style.Fill != nil {
-		fillPolygon(layer.Img, points, style.Fill)
+		fillPolygon(img, points, style.Fill)
 	}
 	if style.Stroke != nil {
-		drawPolygonOutline(layer.Img, points, style.Stroke)
+		paintPolygonOutline(img, points, style.Stroke)
 	}
 }
 
-func drawSpatialRectangle(layer *Layer, rect geometry.Rectangle[int], style SpatialStyle) {
+func rasterizeRectangle(rect geometry.Rectangle[int]) []image.Point {
 	topLeft := rect.TopLeft
 	bottomRight := rect.BottomRight
-	vertices := []geometry.Vec[int]{
-		{X: topLeft.X, Y: topLeft.Y},
-		{X: bottomRight.X, Y: topLeft.Y},
-		{X: bottomRight.X, Y: bottomRight.Y},
-		{X: topLeft.X, Y: bottomRight.Y},
+	return []image.Point{
+		vecToImagePoint(topLeft),
+		image.Pt(bottomRight.X, topLeft.Y),
+		vecToImagePoint(bottomRight),
+		image.Pt(topLeft.X, bottomRight.Y),
 	}
-	drawSpatialPolygon(layer, vertices, style)
 }
 
-func markSpatial(layer *Layer, shape geometry.Spatial[int]) {
-	rect := geometryRectToImageRect(shape.Bounds())
-	layer.queueDirtyRectLocked(rect)
-}
-
-func geometryRectToImageRect(r geometry.Rectangle[int]) image.Rectangle {
-	minX := r.TopLeft.X
-	minY := r.TopLeft.Y
-	maxX := r.BottomRight.X
-	maxY := r.BottomRight.Y
-	if maxX < minX {
-		maxX = minX
+func paintPolygonOutline(img *image.RGBA, points []image.Point, stroke color.Color) {
+	if stroke == nil {
+		return
 	}
-	if maxY < minY {
-		maxY = minY
-	}
-	return image.Rect(minX, minY, maxX+1, maxY+1)
-}
-
-func vecToImagePoint(v geometry.Vec[int]) image.Point {
-	return image.Pt(v.X, v.Y)
-}
-
-func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
-	points := make([]image.Point, len(vecs))
-	for i, v := range vecs {
-		points[i] = vecToImagePoint(v)
-	}
-	return points
-}
-
-func drawPoint(img *image.RGBA, cord image.Point, color color.Color) {
-	img.Set(cord.X, cord.Y, color)
-}
-
-func drawPolygonOutline(img *image.RGBA, points []image.Point, stroke color.Color) {
 	for i := 0; i < len(points); i++ {
 		start := points[i]
 		end := points[(i+1)%len(points)]
-		drawLine(img, start, end, stroke)
+		paintLinePixels(img, rasterizeLine(start, end), stroke)
 	}
 }
 
 func fillPolygon(img *image.RGBA, points []image.Point, col color.Color) {
+	if col == nil || len(points) == 0 {
+		return
+	}
 	minY, maxY := points[0].Y, points[0].Y
 	for _, p := range points {
 		if p.Y < minY {
@@ -186,7 +189,13 @@ func fillPolygon(img *image.RGBA, points []image.Point, col color.Color) {
 	}
 }
 
-func drawLine(img *image.RGBA, start, end image.Point, col color.Color) {
+func paintLinePixels(img *image.RGBA, points []image.Point, col color.Color) {
+	for _, p := range points {
+		img.Set(p.X, p.Y, col)
+	}
+}
+
+func bresenhamLine(start, end image.Point) []image.Point {
 	x0, y0 := start.X, start.Y
 	x1, y1 := end.X, end.Y
 
@@ -202,8 +211,9 @@ func drawLine(img *image.RGBA, start, end image.Point, col color.Color) {
 	}
 	err := dx - dy
 
+	points := make([]image.Point, 0, max(dx, dy)+1)
 	for {
-		img.Set(x0, y0, col)
+		points = append(points, image.Pt(x0, y0))
 		if x0 == x1 && y0 == y1 {
 			break
 		}
@@ -217,6 +227,59 @@ func drawLine(img *image.RGBA, start, end image.Point, col color.Color) {
 			y0 += sy
 		}
 	}
+	return points
+}
+
+func geometryRectToImageRect(r geometry.Rectangle[int]) image.Rectangle {
+	minX := r.TopLeft.X
+	minY := r.TopLeft.Y
+	maxX := r.BottomRight.X
+	maxY := r.BottomRight.Y
+	if maxX < minX {
+		maxX = minX
+	}
+	if maxY < minY {
+		maxY = minY
+	}
+	return image.Rect(minX, minY, maxX+1, maxY+1)
+}
+
+func vecToImagePoint(v geometry.Vec[int]) image.Point {
+	return image.Pt(v.X, v.Y)
+}
+
+func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
+	points := make([]image.Point, len(vecs))
+	for i, v := range vecs {
+		points[i] = vecToImagePoint(v)
+	}
+	return points
+}
+
+func spatialRectangles(shape geometry.Spatial[int]) []image.Rectangle {
+	if shape == nil {
+		return nil
+	}
+	rects := make([]image.Rectangle, 0, 1)
+	mainRect := geometryRectToImageRect(shape.Bounds())
+	if !mainRect.Empty() {
+		rects = append(rects, mainRect)
+	}
+	fragments := shape.Fragments()
+	if len(fragments) == 0 {
+		return rects
+	}
+	for _, fragment := range fragments {
+		if fragment == nil {
+			continue
+		}
+		rect := geometryRectToImageRect(fragment.Bounds())
+		if rect.Empty() {
+			continue
+		}
+		rects = append(rects, rect)
+	}
+	return rects
 }
 
 func abs(x int) int {
@@ -224,4 +287,11 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

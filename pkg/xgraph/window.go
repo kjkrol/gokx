@@ -74,7 +74,7 @@ func (w *Window) Show() {
 	w.defaultPane.Refresh()
 }
 
-func (w *Window) Refresh(fps int) {
+func (w *Window) RefreshRate(fps int) {
 	if fps <= 0 {
 		fps = 60
 	}

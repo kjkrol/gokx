@@ -311,9 +311,15 @@ func convert(event C.XEvent) Event {
 		return KeyRelease{Code: code, Label: label}
 	case 4:
 		event := (*C.XButtonEvent)(unsafe.Pointer(&event))
+		if dx, dy, ok := x11WheelDelta(uint(event.button)); ok {
+			return MouseWheel{DeltaX: dx, DeltaY: dy, X: int(event.x), Y: int(event.y)}
+		}
 		return ButtonPress{Button: uint32(event.button), X: int(event.x), Y: int(event.y)}
 	case 5:
 		event := (*C.XButtonEvent)(unsafe.Pointer(&event))
+		if _, _, ok := x11WheelDelta(uint(event.button)); ok {
+			return UnexpectedEvent{}
+		}
 		return ButtonRelease{Button: uint32(event.button), X: int(event.x), Y: int(event.y)}
 	case 6:
 		event := (*C.XButtonEvent)(unsafe.Pointer(&event))
@@ -338,4 +344,19 @@ func convert(event C.XEvent) Event {
 
 func FD_SET(fd int, p *syscall.FdSet) {
 	p.Bits[fd/64] |= 1 << (uint(fd) % 64)
+}
+
+func x11WheelDelta(button uint) (float64, float64, bool) {
+	switch button {
+	case 4:
+		return 0, 1, true
+	case 5:
+		return 0, -1, true
+	case 6:
+		return -1, 0, true
+	case 7:
+		return 1, 0, true
+	default:
+		return 0, 0, false
+	}
 }

@@ -29,6 +29,11 @@ type LeaveNotify struct{}
 type CreateNotify struct{}
 type DestroyNotify struct{}
 type ClientMessage struct{}
+type MouseWheel struct {
+	DeltaX float64
+	DeltaY float64
+	X, Y   int
+}
 type UnexpectedEvent struct{}
 
 func convert(event platform.Event) Event {
@@ -53,6 +58,8 @@ func convert(event platform.Event) Event {
 		return DestroyNotify{}
 	case platform.ClientMessage:
 		return ClientMessage{}
+	case platform.MouseWheel:
+		return MouseWheel{DeltaX: e.DeltaX, DeltaY: e.DeltaY, X: e.X, Y: e.Y}
 	default:
 		return UnexpectedEvent{}
 	}

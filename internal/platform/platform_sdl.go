@@ -140,6 +140,22 @@ func convert(event C.SDL_Event) Event {
 			X: int(mouseEvent.x),
 			Y: int(mouseEvent.y),
 		}
+	case C.SDL_MOUSEWHEEL:
+		wheelEvent := (*C.SDL_MouseWheelEvent)(unsafe.Pointer(&event))
+		dx := float64(wheelEvent.x)
+		dy := float64(wheelEvent.y)
+		if wheelEvent.direction == C.SDL_MOUSEWHEEL_FLIPPED {
+			dx = -dx
+			dy = -dy
+		}
+		var mx, my C.int
+		C.SDL_GetMouseState(&mx, &my)
+		return MouseWheel{
+			DeltaX: dx,
+			DeltaY: dy,
+			X:      int(mx),
+			Y:      int(my),
+		}
 	case C.SDL_WINDOWEVENT:
 		windowEvent := (*C.SDL_WindowEvent)(unsafe.Pointer(&event))
 		switch windowEvent.event {
@@ -151,8 +167,11 @@ func convert(event C.SDL_Event) Event {
 			return LeaveNotify{}
 		}
 	default:
-		fmt.Printf("Unhandled SDL event type: %d\n", eventType)
-		return UnknownEvent{}
+		if eventType >= C.SDL_USEREVENT && eventType < C.SDL_LASTEVENT {
+			return UnexpectedEvent{}
+		}
+		// fmt.Printf("Unhandled SDL event type: %d\n", eventType)
+		return UnexpectedEvent{}
 	}
 	return UnexpectedEvent{}
 }
