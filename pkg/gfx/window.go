@@ -25,6 +25,7 @@ func (w WindowConfig) convert() platform.WindowConfig {
 
 type Window struct {
 	platformWinWrapper platform.PlatformWindowWrapper
+	surfaceFactory     platform.SurfaceFactory
 	defaultPane        *Pane
 	panes              map[string]*Pane
 	rerfreshing        bool
@@ -42,6 +43,10 @@ func NewWindow(conf WindowConfig) *Window {
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
 	}
+	window.surfaceFactory = window.platformWinWrapper.SurfaceFactory()
+	if window.surfaceFactory == nil {
+		window.surfaceFactory = platform.DefaultSurfaceFactory()
+	}
 	window.defaultPane = newPane(
 		&PaneConfig{
 			Width:   conf.Width,
@@ -49,6 +54,7 @@ func NewWindow(conf WindowConfig) *Window {
 			OffsetX: 0,
 			OffsetY: 0,
 		},
+		window.surfaceFactory,
 		window.platformWinWrapper.NewPlatformImageWrapper)
 	window.ctx, window.cancel = context.WithCancel(context.Background())
 	window.rerfreshing = false
@@ -56,7 +62,7 @@ func NewWindow(conf WindowConfig) *Window {
 }
 
 func (w *Window) AddPane(name string, conf *PaneConfig) *Pane {
-	pane := newPane(conf, w.platformWinWrapper.NewPlatformImageWrapper)
+	pane := newPane(conf, w.surfaceFactory, w.platformWinWrapper.NewPlatformImageWrapper)
 	w.panes[name] = pane
 	return pane
 }

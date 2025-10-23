@@ -21,11 +21,12 @@ import (
 )
 
 type sdlWindowWrapper struct {
-	window   *C.SDL_Window
-	renderer *C.SDL_Renderer
-	title    string
-	width    int
-	height   int
+	window         *C.SDL_Window
+	renderer       *C.SDL_Renderer
+	title          string
+	width          int
+	height         int
+	surfaceFactory SurfaceFactory
 }
 
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
@@ -50,7 +51,14 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		panic(fmt.Sprintf("SDL_CreateRenderer error: %s", C.GoString(C.SDL_GetError())))
 	}
 
-	return &sdlWindowWrapper{window, renderer, conf.Title, conf.Width, conf.Height}
+	return &sdlWindowWrapper{
+		window:         window,
+		renderer:       renderer,
+		title:          conf.Title,
+		width:          conf.Width,
+		height:         conf.Height,
+		surfaceFactory: DefaultSurfaceFactory(),
+	}
 }
 
 func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
@@ -181,6 +189,10 @@ func convert(event C.SDL_Event) Event {
 
 func (w *sdlWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return newSDLImageWrapper(w, img, offsetX, offsetY)
+}
+
+func (w *sdlWindowWrapper) SurfaceFactory() SurfaceFactory {
+	return w.surfaceFactory
 }
 
 type sdlImageWrapper struct {

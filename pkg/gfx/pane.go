@@ -16,40 +16,52 @@ type PaneConfig struct {
 type Pane struct {
 	Config             *PaneConfig
 	layers             []*Layer
+	imgSurface         platform.Surface
 	img                *image.RGBA
+	offscreenSurface   platform.Surface
 	offscreenImg       *image.RGBA
 	dirtyBounds        image.Rectangle
 	dirty              bool
 	mu                 sync.Mutex
 	compMu             sync.Mutex
-	layerComposites    []*image.RGBA
+	layerComposites    []platform.Surface
 	compositeDirty     []bool
 	platformImgWrapper platform.PlatformImageWrapper
+	surfaceFactory     platform.SurfaceFactory
 }
 
 func newPane(
 	conf *PaneConfig,
+	surfaceFactory platform.SurfaceFactory,
 	newPlatformImageWrapper func(img *image.RGBA, offsetX, offsetY int) platform.PlatformImageWrapper,
 ) *Pane {
-	img := image.NewRGBA(image.Rect(0, 0, conf.Width, conf.Height))
+	if surfaceFactory == nil {
+		surfaceFactory = platform.DefaultSurfaceFactory()
+	}
+	imgSurface := surfaceFactory.New(conf.Width, conf.Height)
+	img := imgSurface.RGBA()
 	imageWrapper := newPlatformImageWrapper(img, conf.OffsetX, conf.OffsetY)
-	offscreenImg := image.NewRGBA(image.Rect(0, 0, conf.Width, conf.Height))
+	offscreenSurface := surfaceFactory.New(conf.Width, conf.Height)
+	offscreenImg := offscreenSurface.RGBA()
 	layers := make([]*Layer, 1)
 	pane := Pane{
 		Config:             conf,
 		layers:             layers,
 		dirtyBounds:        offscreenImg.Rect,
 		dirty:              true,
-		layerComposites:    make([]*image.RGBA, 1),
+		layerComposites:    make([]platform.Surface, 1),
 		compositeDirty:     []bool{true},
 		platformImgWrapper: imageWrapper,
+		imgSurface:         imgSurface,
 		img:                img,
+		offscreenSurface:   offscreenSurface,
 		offscreenImg:       offscreenImg,
+		surfaceFactory:     surfaceFactory,
 	}
 	layer := NewLayerDefault(conf.Width, conf.Height, &pane)
 	layer.idx = 0
 	layers[0] = layer
-	pane.layerComposites[0] = offscreenImg
+	pane.layerComposites[0] = offscreenSurface
 	return &pane
 }
 
@@ -73,11 +85,12 @@ func (p *Pane) AddLayer(num int) bool {
 	p.compMu.Lock()
 	if len(p.layerComposites) > 0 {
 		lastIdx := len(p.layerComposites) - 1
-		if p.layerComposites[lastIdx] == p.offscreenImg {
-			p.layerComposites[lastIdx] = image.NewRGBA(p.img.Rect)
+		if p.layerComposites[lastIdx] == p.offscreenSurface {
+			rect := p.img.Rect
+			p.layerComposites[lastIdx] = p.surfaceFactory.New(rect.Dx(), rect.Dy())
 		}
 	}
-	p.layerComposites = append(p.layerComposites, p.offscreenImg)
+	p.layerComposites = append(p.layerComposites, p.offscreenSurface)
 	p.compositeDirty = append(p.compositeDirty, true)
 	for i := range p.compositeDirty {
 		p.compositeDirty[i] = true
@@ -148,19 +161,22 @@ func (p *Pane) Refresh() {
 	finalComposite := p.ensureComposite(len(p.layerComposites) - 1)
 	p.compMu.Unlock()
 
-	draw.Draw(p.img, minRect, finalComposite, minRect.Min, draw.Src)
+	if finalComposite != nil {
+		draw.Draw(p.img, minRect, finalComposite.RGBA(), minRect.Min, draw.Src)
+	}
 	p.platformImgWrapper.Update(minRect)
 }
 
-func (p *Pane) ensureComposite(idx int) *image.RGBA {
+func (p *Pane) ensureComposite(idx int) platform.Surface {
 	if idx < 0 || idx >= len(p.layerComposites) {
 		return nil
 	}
 	if p.layerComposites[idx] == nil {
 		if idx == len(p.layerComposites)-1 {
-			p.layerComposites[idx] = p.offscreenImg
+			p.layerComposites[idx] = p.offscreenSurface
 		} else {
-			p.layerComposites[idx] = image.NewRGBA(p.img.Rect)
+			rect := p.img.Rect
+			p.layerComposites[idx] = p.surfaceFactory.New(rect.Dx(), rect.Dy())
 		}
 	}
 	return p.layerComposites[idx]
@@ -182,7 +198,8 @@ func (p *Pane) rebuildComposites(rect image.Rectangle, start int) {
 			continue
 		}
 
-		clipped := rect.Intersect(dst.Bounds())
+		dstImg := dst.RGBA()
+		clipped := rect.Intersect(dstImg.Bounds())
 		if clipped.Empty() {
 			p.compositeDirty[i] = false
 			continue
@@ -190,15 +207,15 @@ func (p *Pane) rebuildComposites(rect image.Rectangle, start int) {
 
 		if i == 0 {
 			layer.mu.Lock()
-			draw.Draw(dst, clipped, layer.Img, clipped.Min, draw.Src)
+			draw.Draw(dstImg, clipped, layer.Img, clipped.Min, draw.Src)
 			layer.mu.Unlock()
 		} else {
 			prev := p.ensureComposite(i - 1)
 			if prev != nil {
-				draw.Draw(dst, clipped, prev, clipped.Min, draw.Src)
+				draw.Draw(dstImg, clipped, prev.RGBA(), clipped.Min, draw.Src)
 			}
 			layer.mu.Lock()
-			draw.Draw(dst, clipped, layer.Img, clipped.Min, draw.Over)
+			draw.Draw(dstImg, clipped, layer.Img, clipped.Min, draw.Over)
 			layer.mu.Unlock()
 		}
 		p.compositeDirty[i] = false
@@ -211,6 +228,9 @@ func (p *Pane) Close() {
 	for i := range p.layers {
 		p.layers[i].Img = nil
 	}
+	p.imgSurface = nil
+	p.offscreenSurface = nil
+	p.surfaceFactory = nil
 	p.layerComposites = nil
 	p.compositeDirty = nil
 }

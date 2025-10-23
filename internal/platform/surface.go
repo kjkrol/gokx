@@ -16,6 +16,20 @@ type Surface interface {
 	RGBA() *image.RGBA
 }
 
+type SurfaceFactory interface {
+	New(width, height int) Surface
+}
+
+func DefaultSurfaceFactory() SurfaceFactory {
+	return surfaceFactoryFunc(NewRGBASurface)
+}
+
+type surfaceFactoryFunc func(width, height int) Surface
+
+func (f surfaceFactoryFunc) New(width, height int) Surface {
+	return f(width, height)
+}
+
 // NewRGBASurface creates a Surface backed by image.RGBA.
 func NewRGBASurface(width, height int) Surface {
 	return &rgbaSurface{

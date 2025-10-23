@@ -92,9 +92,10 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	C.XStoreName(conn.display, window, title)
 
 	return &x11WindowWrapper{
-		conn:   conn,
-		window: window,
-		title:  title,
+		conn:           conn,
+		window:         window,
+		title:          title,
+		surfaceFactory: DefaultSurfaceFactory(),
 	}
 }
 
@@ -234,12 +235,13 @@ func (xw *x11ImageWrapper) Delete() {
 // ----------------------------------------------------------------------------
 
 type x11WindowWrapper struct {
-	conn    *xConnection
-	window  C.Window
-	title   *C.char
-	fd      int
-	readFD  syscall.FdSet
-	timeval syscall.Timeval
+	conn           *xConnection
+	window         C.Window
+	title          *C.char
+	fd             int
+	readFD         syscall.FdSet
+	timeval        syscall.Timeval
+	surfaceFactory SurfaceFactory
 }
 
 func (w *x11WindowWrapper) Show() {
@@ -284,6 +286,10 @@ func (w *x11WindowWrapper) NextEventTimeout(timeoutMs int) Event {
 		return convert(ev)
 	}
 	return TimeoutEvent{}
+}
+
+func (w *x11WindowWrapper) SurfaceFactory() SurfaceFactory {
+	return w.surfaceFactory
 }
 
 func (w *x11WindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {

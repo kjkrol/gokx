@@ -22,11 +22,12 @@ import (
 )
 
 type sdlGPUWindowWrapper struct {
-	window   *C.SDL_Window
-	renderer *C.SDL_Renderer
-	title    string
-	width    int
-	height   int
+	window         *C.SDL_Window
+	renderer       *C.SDL_Renderer
+	title          string
+	width          int
+	height         int
+	surfaceFactory SurfaceFactory
 }
 
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
@@ -73,11 +74,12 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	}
 
 	return &sdlGPUWindowWrapper{
-		window:   window,
-		renderer: renderer,
-		title:    conf.Title,
-		width:    conf.Width,
-		height:   conf.Height,
+		window:         window,
+		renderer:       renderer,
+		title:          conf.Title,
+		width:          conf.Width,
+		height:         conf.Height,
+		surfaceFactory: DefaultSurfaceFactory(),
 	}
 }
 
@@ -138,6 +140,10 @@ func (w *sdlGPUWindowWrapper) NextEventTimeout(timeoutMs int) Event {
 
 func (w *sdlGPUWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return newSDLGPUImageWrapper(w, img, offsetX, offsetY)
+}
+
+func (w *sdlGPUWindowWrapper) SurfaceFactory() SurfaceFactory {
+	return w.surfaceFactory
 }
 
 func convert(event C.SDL_Event) Event {
