@@ -3,6 +3,7 @@ package xgraph
 import (
 	"image"
 	"image/color"
+	"sort"
 
 	"github.com/kjkrol/gokg/pkg/geometry"
 )
@@ -70,8 +71,7 @@ func drawSpatialLine(layer *Layer, start, end geometry.Vec[int], style SpatialSt
 	if style.Stroke == nil {
 		return
 	}
-	points := bresenhamLine(vecToImagePoint(start), vecToImagePoint(end))
-	drawLine(layer.Img, points, style.Stroke)
+	drawLine(layer.Img, vecToImagePoint(start), vecToImagePoint(end), style.Stroke)
 }
 
 func drawSpatialPolygon(layer *Layer, vertices []geometry.Vec[int], style SpatialStyle) {
@@ -138,8 +138,7 @@ func drawPolygonOutline(img *image.RGBA, points []image.Point, stroke color.Colo
 	for i := 0; i < len(points); i++ {
 		start := points[i]
 		end := points[(i+1)%len(points)]
-		linePoints := bresenhamLine(start, end)
-		drawLine(img, linePoints, stroke)
+		drawLine(img, start, end, stroke)
 	}
 }
 
@@ -154,35 +153,40 @@ func fillPolygon(img *image.RGBA, points []image.Point, col color.Color) {
 		}
 	}
 
+	intersections := make([]int, len(points))
+
 	for y := minY; y <= maxY; y++ {
-		var intersections []int
+		count := 0
 		for i := 0; i < len(points); i++ {
 			p1 := points[i]
 			p2 := points[(i+1)%len(points)]
 			if (p1.Y <= y && p2.Y > y) || (p1.Y > y && p2.Y <= y) {
-				x := p1.X + (y-p1.Y)*(p2.X-p1.X)/(p2.Y-p1.Y)
-				intersections = append(intersections, x)
-			}
-		}
-
-		sortInts(intersections)
-		for i := 0; i < len(intersections); i += 2 {
-			if i+1 < len(intersections) {
-				for x := intersections[i]; x <= intersections[i+1]; x++ {
-					img.Set(x, y, col)
+				denominator := p2.Y - p1.Y
+				if denominator == 0 {
+					continue
 				}
+				x := p1.X + (y-p1.Y)*(p2.X-p1.X)/denominator
+				intersections[count] = x
+				count++
+			}
+		}
+
+		if count < 2 {
+			continue
+		}
+
+		sort.Ints(intersections[:count])
+		for i := 0; i+1 < count; i += 2 {
+			startX := intersections[i]
+			endX := intersections[i+1]
+			for x := startX; x <= endX; x++ {
+				img.Set(x, y, col)
 			}
 		}
 	}
 }
 
-func drawLine(img *image.RGBA, points []image.Point, col color.Color) {
-	for _, p := range points {
-		img.Set(p.X, p.Y, col)
-	}
-}
-
-func bresenhamLine(start, end image.Point) []image.Point {
+func drawLine(img *image.RGBA, start, end image.Point, col color.Color) {
 	x0, y0 := start.X, start.Y
 	x1, y1 := end.X, end.Y
 
@@ -198,9 +202,8 @@ func bresenhamLine(start, end image.Point) []image.Point {
 	}
 	err := dx - dy
 
-	points := []image.Point{}
 	for {
-		points = append(points, image.Pt(x0, y0))
+		img.Set(x0, y0, col)
 		if x0 == x1 && y0 == y1 {
 			break
 		}
@@ -214,7 +217,6 @@ func bresenhamLine(start, end image.Point) []image.Point {
 			y0 += sy
 		}
 	}
-	return points
 }
 
 func abs(x int) int {
@@ -222,14 +224,4 @@ func abs(x int) int {
 		return -x
 	}
 	return x
-}
-
-func sortInts(slice []int) {
-	for i := 0; i < len(slice); i++ {
-		for j := i + 1; j < len(slice); j++ {
-			if slice[i] > slice[j] {
-				slice[i], slice[j] = slice[j], slice[i]
-			}
-		}
-	}
 }

@@ -23,6 +23,7 @@ static int getConnectionNumber(Display* d) {
 import "C"
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image"
 	"syscall"
@@ -194,25 +195,25 @@ func copyRectRGBAtoBGRA(dst []byte, dstStride int, src *image.RGBA, rect image.R
 	sy0 := rect.Min.Y - src.Rect.Min.Y
 	w := rect.Dx()
 	h := rect.Dy()
+	if w <= 0 || h <= 0 {
+		return
+	}
+
+	rowBytes := w * 4
+	srcStride := src.Stride
+	baseDstOffset := rect.Min.Y*dstStride + rect.Min.X*4
 
 	for row := 0; row < h; row++ {
-		sOff := (sy0+row)*src.Stride + sx0*4
-		dOff := (rect.Min.Y+row)*dstStride + rect.Min.X*4
+		sOff := (sy0+row)*srcStride + sx0*4
+		dOff := baseDstOffset + row*dstStride
 
-		s := src.Pix[sOff:]
-		d := dst[dOff:]
+		s := src.Pix[sOff : sOff+rowBytes]
+		d := dst[dOff : dOff+rowBytes]
 
-		// po pikselu: RGBA(s) -> BGRA(d)
-		for x := 0; x < w; x++ {
-			sr := s[4*x+0]
-			sg := s[4*x+1]
-			sb := s[4*x+2]
-			sa := s[4*x+3]
-
-			d[4*x+0] = sb // B
-			d[4*x+1] = sg // G
-			d[4*x+2] = sr // R
-			d[4*x+3] = sa // A (przy depth=24 alpha zwykle ignorowana, ale zostawiamy)
+		for si, di := 0, 0; si < rowBytes; si, di = si+4, di+4 {
+			pix := binary.LittleEndian.Uint32(s[si:])
+			swapped := (pix & 0xFF00FF00) | ((pix & 0x000000FF) << 16) | ((pix & 0x00FF0000) >> 16)
+			binary.LittleEndian.PutUint32(d[di:], swapped)
 		}
 	}
 }
@@ -233,9 +234,12 @@ func (xw *x11ImageWrapper) Delete() {
 // ----------------------------------------------------------------------------
 
 type x11WindowWrapper struct {
-	conn   *xConnection
-	window C.Window
-	title  *C.char
+	conn    *xConnection
+	window  C.Window
+	title   *C.char
+	fd      int
+	readFD  syscall.FdSet
+	timeval syscall.Timeval
 }
 
 func (w *x11WindowWrapper) Show() {
@@ -253,14 +257,23 @@ func (w *x11WindowWrapper) Close() {
 }
 
 func (w *x11WindowWrapper) NextEventTimeout(timeoutMs int) Event {
-	fd := int(C.getConnectionNumber(w.conn.display))
+	if w.fd == 0 {
+		w.fd = int(C.getConnectionNumber(w.conn.display))
+	}
 
-	tv := syscall.NsecToTimeval((time.Duration(timeoutMs) * time.Millisecond).Nanoseconds())
+	if timeoutMs < 0 {
+		timeoutMs = 0
+	}
 
-	var readfds syscall.FdSet
-	FD_SET(fd, &readfds)
+	duration := time.Duration(timeoutMs) * time.Millisecond
+	w.timeval = syscall.NsecToTimeval(duration.Nanoseconds())
 
-	n, err := syscall.Select(fd+1, &readfds, nil, nil, &tv)
+	for i := range w.readFD.Bits {
+		w.readFD.Bits[i] = 0
+	}
+	FD_SET(w.fd, &w.readFD)
+
+	n, err := syscall.Select(w.fd+1, &w.readFD, nil, nil, &w.timeval)
 	if err != nil || n == 0 {
 		return TimeoutEvent{}
 	}
