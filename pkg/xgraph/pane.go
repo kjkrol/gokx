@@ -19,7 +19,8 @@ type Pane struct {
 	layers             []*Layer
 	img                *image.RGBA
 	offscreenImg       *image.RGBA
-	dirtyRects         []*image.Rectangle
+	dirtyBounds        image.Rectangle
+	dirty              bool
 	mu                 sync.Mutex // Mutex to protect the dirty flag
 	platformImgWrapper platform.PlatformImageWrapper
 }
@@ -35,7 +36,8 @@ func newPane(
 	pane := Pane{
 		Config:             conf,
 		layers:             layers,
-		dirtyRects:         []*image.Rectangle{&offscreenImg.Rect},
+		dirtyBounds:        offscreenImg.Rect,
+		dirty:              true,
 		platformImgWrapper: imageWrapper,
 		img:                img,
 		offscreenImg:       offscreenImg,
@@ -66,32 +68,30 @@ func (p *Pane) MarkToRefresh(rect *image.Rectangle) {
 
 	// Only add the rectangle if it still has non-zero size
 	if !clippedRect.Empty() {
-		p.dirtyRects = append(p.dirtyRects, &clippedRect)
+		if !p.dirty {
+			p.dirtyBounds = clippedRect
+			p.dirty = true
+			return
+		}
+		p.dirtyBounds = p.dirtyBounds.Union(clippedRect)
 	}
 }
 
-func (p *Pane) CopyDirtyRects() []*image.Rectangle {
+func (p *Pane) takeDirtyBounds() (image.Rectangle, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.dirtyRects == nil {
-		return nil
+	if !p.dirty {
+		return image.Rectangle{}, false
 	}
-	rects := make([]*image.Rectangle, len(p.dirtyRects))
-	copy(rects, p.dirtyRects)
-	p.dirtyRects = nil
-	return rects
+	rect := p.dirtyBounds
+	p.dirty = false
+	return rect, true
 }
 
 func (p *Pane) Refresh() {
-	copiedDirtyRects := p.CopyDirtyRects()
-	if copiedDirtyRects == nil {
+	minRect, dirty := p.takeDirtyBounds()
+	if !dirty {
 		return
-	}
-
-	// oblicz bounding box
-	minRect := *copiedDirtyRects[0]
-	for _, r := range copiedDirtyRects[1:] {
-		minRect = minRect.Union(*r)
 	}
 
 	// wyczyść tylko bounding box w offscreen
