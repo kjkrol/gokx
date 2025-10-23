@@ -54,26 +54,24 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 }
 
 func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
-	// Najpierw spróbuj akcelerowany bez vsync dla mniejszego opóźnienia
 	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
 	if renderer != nil && rendererWorks(renderer) {
+		fmt.Println("SDL renderer backend: accelerated")
 		return renderer
 	}
 	if renderer != nil {
-		C.SDL_DestroyRenderer(renderer)
+		renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
 	}
-
-	// Druga próba: akcelerowany z vsync
-	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
 	if renderer != nil && rendererWorks(renderer) {
+		fmt.Println("SDL renderer backend: accelerated+vsync")
 		return renderer
 	}
 	if renderer != nil {
-		C.SDL_DestroyRenderer(renderer)
+		renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
 	}
-
-	// Ostatecznie: software (działał u Ciebie na pewno)
-	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
+	if renderer != nil {
+		fmt.Println("SDL renderer backend: software")
+	}
 	return renderer
 }
 

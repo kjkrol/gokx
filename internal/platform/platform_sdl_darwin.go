@@ -1,4 +1,4 @@
-//go:build darwin && !x11 && cgo
+//go:build darwin && !x11 && cgo && !gpu
 
 package platform
 
