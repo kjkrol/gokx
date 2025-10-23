@@ -12,17 +12,18 @@ import (
 const defaultDirtyRectCapacity = 64
 
 type Layer struct {
-	Img          *image.RGBA
-	pane         *Pane
-	mu           sync.Mutex
-	idx          int
-	dirtyRectCap int
-	dirtyRects   []image.Rectangle
-	flushRects   []image.Rectangle
-	batchedRects []image.Rectangle
-	batchDepth   int
-	drawables    []*DrawableSpatial
-	background   color.Color
+	Img             *image.RGBA
+	pane            *Pane
+	mu              sync.Mutex
+	idx             int
+	dirtyRectCap    int
+	dirtyRects      []image.Rectangle
+	flushRects      []image.Rectangle
+	batchedRects    []image.Rectangle
+	batchDepth      int
+	drawables       []*DrawableSpatial
+	background      color.Color
+	needsFullRender bool
 }
 
 func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
@@ -30,9 +31,10 @@ func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
 		dirtyCap = defaultDirtyRectCapacity
 	}
 	layer := &Layer{
-		Img:          image.NewRGBA(image.Rect(0, 0, width, height)),
-		pane:         pane,
-		dirtyRectCap: dirtyCap,
+		Img:             image.NewRGBA(image.Rect(0, 0, width, height)),
+		pane:            pane,
+		dirtyRectCap:    dirtyCap,
+		needsFullRender: false,
 	}
 	layer.dirtyRects = make([]image.Rectangle, 0, dirtyCap)
 	layer.flushRects = make([]image.Rectangle, dirtyCap)
@@ -52,6 +54,7 @@ func (l *Layer) SetBackground(color color.Color) {
 	l.mu.Lock()
 	l.background = color
 	draw.Draw(l.Img, l.Img.Bounds(), &image.Uniform{color}, image.Point{}, draw.Src)
+	l.needsFullRender = true
 	l.queueDirtyRectsLocked(l.Img.Bounds())
 	l.flushLocked()
 }
@@ -74,6 +77,7 @@ func (l *Layer) AddDrawable(drawable *DrawableSpatial) {
 	}
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
+	paintDrawable(l.Img, drawable)
 	l.queueSpatialDirtyLocked(drawable.Shape)
 	l.flushLocked()
 }
@@ -100,6 +104,7 @@ func (l *Layer) RemoveDrawable(drawable *DrawableSpatial) {
 		l.drawables = append(l.drawables[:idx], l.drawables[idx+1:]...)
 	}
 	drawable.detach()
+	l.needsFullRender = true
 	l.queueSpatialDirtyLocked(drawable.Shape)
 	l.flushLocked()
 }
@@ -139,6 +144,7 @@ func (l *Layer) ModifyDrawable(drawable *DrawableSpatial, mutate func()) {
 		l.mu.Unlock()
 		return
 	}
+	l.needsFullRender = true
 	l.queueRectsLocked(oldRects...)
 	l.queueRectsLocked(newRects...)
 	l.flushLocked()
@@ -146,7 +152,14 @@ func (l *Layer) ModifyDrawable(drawable *DrawableSpatial, mutate func()) {
 
 func (l *Layer) render(rect image.Rectangle) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	if !l.needsFullRender {
+		l.mu.Unlock()
+		return
+	}
+	defer func() {
+		l.needsFullRender = false
+		l.mu.Unlock()
+	}()
 
 	if l.Img == nil {
 		return
