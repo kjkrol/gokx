@@ -38,6 +38,12 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	C.free(unsafe.Pointer(hint))
 	C.free(unsafe.Pointer(metal))
 
+	scaleHint := C.CString("SDL_RENDER_SCALE_QUALITY")
+	nearest := C.CString("nearest")
+	C.SDL_SetHint(scaleHint, nearest)
+	C.free(unsafe.Pointer(scaleHint))
+	C.free(unsafe.Pointer(nearest))
+
 	if C.SDL_Init(C.SDL_INIT_VIDEO) != 0 {
 		runtime.UnlockOSThread()
 		panic(fmt.Sprintf("SDL_Init error: %s", C.GoString(C.SDL_GetError())))
