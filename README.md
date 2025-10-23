@@ -61,5 +61,11 @@ To run WASM demo execute:
 make wasm-serve
 ```
 
+## Other demos
 
+You can select which demo app to build / run using Make, e.g.
+
+```shell
+make DEMO=cmd/demo-quadtree/main.go run-sdl2
+```
 

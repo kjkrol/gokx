@@ -1,4 +1,4 @@
-package xgraph
+package gfx
 
 import (
 	"image"
