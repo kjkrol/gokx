@@ -1,4 +1,4 @@
-//go:build !x11 && !darwin
+//go:build (linux || windows) && !x11 && cgo
 
 package platform
 

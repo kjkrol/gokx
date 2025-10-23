@@ -23,7 +23,7 @@ build-x11:
 
 build-sdl2:
 	@mkdir -p bin
-	GOOS=linux GOARCH=amd64 $(GO) build -o $(BIN_SDL2) $(DEMO)
+	$(GO) build -o $(BIN_SDL2) $(DEMO)
 
 wasm-build:
 	cp $(GOROOT)/lib/wasm/wasm_exec.js $(WASM_DIR)/

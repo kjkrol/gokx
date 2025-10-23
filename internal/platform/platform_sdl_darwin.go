@@ -1,4 +1,4 @@
-//go:build !x11
+//go:build darwin && !x11 && cgo
 
 package platform
 
