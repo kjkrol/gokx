@@ -13,9 +13,8 @@ type SpatialStyle struct {
 }
 
 type DrawableSpatial struct {
-	Shape     geometry.Spatial[int]
-	Style     SpatialStyle
-	Fragments []geometry.Spatial[int]
+	Shape geometry.Spatial[int]
+	Style SpatialStyle
 }
 
 var transparentColor = color.RGBA{0, 0, 0, 0}
@@ -24,11 +23,12 @@ func (d *DrawableSpatial) Draw(layer *Layer) {
 	if d == nil || d.Shape == nil {
 		return
 	}
-	if len(d.Fragments) == 0 {
-		d.drawShape(layer, d.Shape)
+	d.drawShape(layer, d.Shape)
+	fragments := d.Shape.Fragments()
+	if len(fragments) == 0 {
 		return
 	}
-	for _, fragment := range d.Fragments {
+	for _, fragment := range fragments {
 		if fragment == nil {
 			continue
 		}
