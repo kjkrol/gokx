@@ -79,7 +79,7 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		title:          conf.Title,
 		width:          conf.Width,
 		height:         conf.Height,
-		surfaceFactory: DefaultSurfaceFactory(),
+		surfaceFactory: newSDLGPUCompatibleFactory(renderer),
 	}
 }
 
@@ -144,6 +144,19 @@ func (w *sdlGPUWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, 
 
 func (w *sdlGPUWindowWrapper) SurfaceFactory() SurfaceFactory {
 	return w.surfaceFactory
+}
+
+type sdlGPUSurfaceFactory struct {
+	renderer *C.SDL_Renderer
+}
+
+func newSDLGPUCompatibleFactory(renderer *C.SDL_Renderer) SurfaceFactory {
+	return sdlGPUSurfaceFactory{renderer: renderer}
+}
+
+func (f sdlGPUSurfaceFactory) New(width, height int) Surface {
+	// TODO: replace with texture-backed surfaces that keep data on the GPU.
+	return NewRGBASurface(width, height)
 }
 
 func convert(event C.SDL_Event) Event {

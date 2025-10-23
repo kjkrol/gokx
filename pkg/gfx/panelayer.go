@@ -82,7 +82,7 @@ func (l *Layer) AddDrawable(drawable *DrawableSpatial) {
 	}
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
-	paintDrawableSurface(platform.WrapRGBASurface(l.Img), drawable)
+	paintDrawableSurface(l.surface, drawable)
 	l.queueSpatialDirtyLocked(drawable.Shape)
 	l.flushLocked()
 }
