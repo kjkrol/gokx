@@ -48,7 +48,7 @@ func newPane(
 	}
 	layer := NewLayerDefault(conf.Width, conf.Height, &pane)
 	layer.idx = 0
-	layers[0] = &layer
+	layers[0] = layer
 	pane.layerComposites[0] = offscreenImg
 	return &pane
 }
@@ -59,7 +59,7 @@ func (p *Pane) AddLayer(num int) bool {
 	}
 	layer := NewLayerDefault(p.Config.Width, p.Config.Height, p)
 	layer.idx = len(p.layers)
-	p.layers = append(p.layers, &layer)
+	p.layers = append(p.layers, layer)
 
 	p.mu.Lock()
 	if !p.dirty {

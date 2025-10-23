@@ -25,11 +25,11 @@ type Layer struct {
 	background   color.Color
 }
 
-func NewLayer(width, height int, pane *Pane, dirtyCap int) Layer {
+func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
 	if dirtyCap <= 0 {
 		dirtyCap = defaultDirtyRectCapacity
 	}
-	layer := Layer{
+	layer := &Layer{
 		Img:          image.NewRGBA(image.Rect(0, 0, width, height)),
 		pane:         pane,
 		dirtyRectCap: dirtyCap,
@@ -40,7 +40,7 @@ func NewLayer(width, height int, pane *Pane, dirtyCap int) Layer {
 	return layer
 }
 
-func NewLayerDefault(width, height int, pane *Pane) Layer {
+func NewLayerDefault(width, height int, pane *Pane) *Layer {
 	return NewLayer(width, height, pane, defaultDirtyRectCapacity)
 }
 
