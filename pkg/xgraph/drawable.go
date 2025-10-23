@@ -101,7 +101,7 @@ func drawSpatialRectangle(layer *Layer, rect geometry.Rectangle[int], style Spat
 
 func markSpatial(layer *Layer, shape geometry.Spatial[int]) {
 	rect := geometryRectToImageRect(shape.Bounds())
-	layer.GetPane().MarkToRefresh(&rect)
+	layer.queueDirtyRectLocked(rect)
 }
 
 func geometryRectToImageRect(r geometry.Rectangle[int]) image.Rectangle {

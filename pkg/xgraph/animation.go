@@ -41,13 +41,15 @@ func (a *Animation) Run(ctx context.Context, id int, wg *sync.WaitGroup) {
 			case <-ctx.Done():
 				return
 			default:
-				for _, drawable := range a.Drawables {
-					a.Layer.Erase(drawable)
-				}
-				a.Evolve()
-				for _, drawable := range a.Drawables {
-					a.Layer.Draw(drawable)
-				}
+				a.Layer.Batch(func() {
+					for _, drawable := range a.Drawables {
+						a.Layer.Erase(drawable)
+					}
+					a.Evolve()
+					for _, drawable := range a.Drawables {
+						a.Layer.Draw(drawable)
+					}
+				})
 			}
 		}
 	}()
