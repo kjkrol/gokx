@@ -32,8 +32,10 @@ type sdlGPUWindowWrapper struct {
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	runtime.LockOSThread()
 
+	hint := C.CString("SDL_RENDER_DRIVER")
 	metal := C.CString("metal")
-	C.SDL_SetHint(C.SDL_HINT_RENDER_DRIVER, metal)
+	C.SDL_SetHint(hint, metal)
+	C.free(unsafe.Pointer(hint))
 	C.free(unsafe.Pointer(metal))
 
 	if C.SDL_Init(C.SDL_INIT_VIDEO) != 0 {
@@ -74,7 +76,7 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 }
 
 func createDarwinRenderer(window *C.SDL_Window, width, height int) *C.SDL_Renderer {
-	flags := []C.Uint{
+	flags := []C.Uint32{
 		C.SDL_RENDERER_ACCELERATED | C.SDL_RENDERER_PRESENTVSYNC,
 		C.SDL_RENDERER_ACCELERATED,
 		C.SDL_RENDERER_SOFTWARE,
@@ -130,6 +132,75 @@ func (w *sdlGPUWindowWrapper) NextEventTimeout(timeoutMs int) Event {
 
 func (w *sdlGPUWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return newSDLGPUImageWrapper(w, img, offsetX, offsetY)
+}
+
+func convert(event C.SDL_Event) Event {
+	switch eventType := (*(*C.Uint32)(unsafe.Pointer(&event))); eventType {
+	case C.SDL_QUIT:
+		return DestroyNotify{}
+	case C.SDL_KEYDOWN:
+		keyEvent := (*C.SDL_KeyboardEvent)(unsafe.Pointer(&event))
+		code := uint64(keyEvent.keysym.scancode)
+		label := C.GoString(C.SDL_GetKeyName(keyEvent.keysym.sym))
+		return KeyPress{Code: code, Label: label}
+	case C.SDL_KEYUP:
+		keyEvent := (*C.SDL_KeyboardEvent)(unsafe.Pointer(&event))
+		code := uint64(keyEvent.keysym.scancode)
+		label := C.GoString(C.SDL_GetKeyName(keyEvent.keysym.sym))
+		return KeyRelease{Code: code, Label: label}
+	case C.SDL_MOUSEBUTTONDOWN:
+		mouseEvent := (*C.SDL_MouseButtonEvent)(unsafe.Pointer(&event))
+		return ButtonPress{
+			Button: uint32(mouseEvent.button),
+			X:      int(mouseEvent.x),
+			Y:      int(mouseEvent.y),
+		}
+	case C.SDL_MOUSEBUTTONUP:
+		mouseEvent := (*C.SDL_MouseButtonEvent)(unsafe.Pointer(&event))
+		return ButtonRelease{
+			Button: uint32(mouseEvent.button),
+			X:      int(mouseEvent.x),
+			Y:      int(mouseEvent.y),
+		}
+	case C.SDL_MOUSEMOTION:
+		mouseEvent := (*C.SDL_MouseMotionEvent)(unsafe.Pointer(&event))
+		return MotionNotify{
+			X: int(mouseEvent.x),
+			Y: int(mouseEvent.y),
+		}
+	case C.SDL_MOUSEWHEEL:
+		wheelEvent := (*C.SDL_MouseWheelEvent)(unsafe.Pointer(&event))
+		dx := float64(wheelEvent.x)
+		dy := float64(wheelEvent.y)
+		if wheelEvent.direction == C.SDL_MOUSEWHEEL_FLIPPED {
+			dx = -dx
+			dy = -dy
+		}
+		var mx, my C.int
+		C.SDL_GetMouseState(&mx, &my)
+		return MouseWheel{
+			DeltaX: dx,
+			DeltaY: dy,
+			X:      int(mx),
+			Y:      int(my),
+		}
+	case C.SDL_WINDOWEVENT:
+		windowEvent := (*C.SDL_WindowEvent)(unsafe.Pointer(&event))
+		switch windowEvent.event {
+		case C.SDL_WINDOWEVENT_EXPOSED:
+			return Expose{}
+		case C.SDL_WINDOWEVENT_ENTER:
+			return EnterNotify{}
+		case C.SDL_WINDOWEVENT_LEAVE:
+			return LeaveNotify{}
+		}
+	default:
+		if eventType >= C.SDL_USEREVENT && eventType < C.SDL_LASTEVENT {
+			return UnexpectedEvent{}
+		}
+		return UnexpectedEvent{}
+	}
+	return UnexpectedEvent{}
 }
 
 type sdlGPUImageWrapper struct {
