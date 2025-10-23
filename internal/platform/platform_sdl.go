@@ -51,8 +51,8 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 }
 
 func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
-	// Najpierw spróbuj akcelerowany z vsync (często stabilniejszy)
-	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
+	// Najpierw spróbuj akcelerowany bez vsync dla mniejszego opóźnienia
+	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
 	if renderer != nil && rendererWorks(renderer) {
 		return renderer
 	}
@@ -60,8 +60,8 @@ func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
 		C.SDL_DestroyRenderer(renderer)
 	}
 
-	// Druga próba: akcelerowany bez vsync
-	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
+	// Druga próba: akcelerowany z vsync
+	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
 	if renderer != nil && rendererWorks(renderer) {
 		return renderer
 	}
@@ -222,17 +222,10 @@ func (i *sdlImageWrapper) Update(rect image.Rectangle) {
 		return
 	}
 
-	sdlRect := C.SDL_Rect{
-		x: C.int(rect.Min.X),
-		y: C.int(rect.Min.Y),
-		w: C.int(rect.Dx()),
-		h: C.int(rect.Dy()),
-	}
-
 	if C.SDL_UpdateTexture(
 		i.texture,
-		&sdlRect,
-		unsafe.Pointer(&i.img.Pix[rect.Min.Y*i.img.Stride+rect.Min.X*4]),
+		nil,
+		unsafe.Pointer(&i.img.Pix[0]),
 		C.int(i.img.Stride),
 	) != 0 {
 		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
