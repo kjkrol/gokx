@@ -34,6 +34,8 @@ type Window struct {
 	cancel             context.CancelFunc
 }
 
+const maxEventWait = 50 * time.Millisecond
+
 func NewWindow(conf WindowConfig) *Window {
 	platformConfig := conf.convert()
 	window := Window{
@@ -104,9 +106,8 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 	if delay == 0 {
 		delay = time.Second / 60 // domyślnie 60 FPS
 	}
-	timeoutMs := 5 // mały timeout żeby często "budzić się"
 
-	lastRender := time.Now()
+	nextRender := time.Now().Add(delay)
 
 	for {
 		select {
@@ -114,7 +115,20 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 			w.wg.Wait()
 			return
 		default:
-			// próbujemy poczekać chwilę na event
+			now := time.Now()
+			timeout := nextRender.Sub(now)
+			if timeout < 0 {
+				timeout = 0
+			}
+			if timeout > maxEventWait {
+				timeout = maxEventWait
+			}
+
+			timeoutMs := int(timeout / time.Millisecond)
+			if timeout > 0 && timeoutMs == 0 {
+				timeoutMs = 1
+			}
+
 			platformEvent := w.platformWinWrapper.NextEventTimeout(timeoutMs)
 
 			switch ev := platformEvent.(type) {
@@ -126,13 +140,13 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 			}
 
 			// sprawdź czy czas na render
-			now := time.Now()
-			if now.Sub(lastRender) >= delay {
+			now = time.Now()
+			if !now.Before(nextRender) {
 				w.GetDefaultPane().Refresh()
 				for _, pane := range w.panes {
 					pane.Refresh()
 				}
-				lastRender = now
+				nextRender = now.Add(delay)
 			}
 		}
 	}
