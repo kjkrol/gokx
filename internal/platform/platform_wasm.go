@@ -141,9 +141,19 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		}
 	})
 
-	addEventListener(canvas, "mousemove", func(e js.Value) {
-		x, y := getCanvasCoords(e)
-		w.events <- MotionNotify{X: x, Y: y} // tu bez zmian
+	addEventListener(canvas, "pointermove", func(e js.Value) {
+		coalesced := e.Call("getCoalescedEvents")
+		length := coalesced.Get("length").Int()
+		if length == 0 {
+			x, y := getCanvasCoords(e)
+			w.events <- MotionNotify{X: x, Y: y}
+			return
+		}
+		for i := 0; i < length; i++ {
+			ev := coalesced.Index(i)
+			x, y := getCanvasCoords(ev)
+			w.events <- MotionNotify{X: x, Y: y}
+		}
 	})
 
 	addEventListener(canvas, "wheel", func(e js.Value) {
@@ -226,14 +236,31 @@ func (i *wasmImageWrapper) Update(rect image.Rectangle) {
 		return
 	}
 
-	w := i.img.Rect.Dx()
-	h := i.img.Rect.Dy()
+	rect = rect.Intersect(i.img.Rect)
+	if rect.Empty() {
+		return
+	}
 
-	uint8Array := js.Global().Get("Uint8ClampedArray").New(len(i.img.Pix))
-	js.CopyBytesToJS(uint8Array, i.img.Pix)
-	imageData := js.Global().Get("ImageData").New(uint8Array, w, h)
+	width := rect.Dx()
+	height := rect.Dy()
+	startX := rect.Min.X - i.img.Rect.Min.X
+	startY := rect.Min.Y - i.img.Rect.Min.Y
+	stride := i.img.Stride
 
-	i.parent.ctx.Call("putImageData", imageData, i.offsetX, i.offsetY)
+	buf := make([]byte, width*height*4)
+	for y := 0; y < height; y++ {
+		srcOffset := (startY+y)*stride + startX*4
+		dstOffset := y * width * 4
+		copy(buf[dstOffset:dstOffset+width*4], i.img.Pix[srcOffset:srcOffset+width*4])
+	}
+
+	uint8Array := js.Global().Get("Uint8ClampedArray").New(len(buf))
+	js.CopyBytesToJS(uint8Array, buf)
+	imageData := js.Global().Get("ImageData").New(uint8Array, width, height)
+
+	drawX := i.offsetX + startX
+	drawY := i.offsetY + startY
+	i.parent.ctx.Call("putImageData", imageData, drawX, drawY)
 }
 
 func (i *wasmImageWrapper) Delete() {
