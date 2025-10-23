@@ -17,7 +17,11 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"os"
 	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -321,40 +325,27 @@ func newSDLTextureImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, 
 }
 
 func (i *sdlTextureImageWrapper) Update(rect image.Rectangle) {
-	if i == nil || i.texture == nil || i.img == nil || rect.Empty() {
+	if i == nil || i.texture == nil || i.img == nil {
 		return
 	}
 
-	rect = rect.Intersect(i.img.Rect)
-	if rect.Empty() {
+	pixels := unsafe.Pointer(&i.img.Pix[0])
+	if C.SDL_UpdateTexture(i.texture, nil, pixels, C.int(i.img.Stride)) != 0 {
+		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
 		return
-	}
-
-	srcX := rect.Min.X - i.img.Rect.Min.X
-	srcY := rect.Min.Y - i.img.Rect.Min.Y
-	offset := srcY*i.img.Stride + srcX*4
-	if offset < 0 || offset >= len(i.img.Pix) {
-		return
-	}
-
-	srcRect := C.SDL_Rect{
-		x: C.int(srcX),
-		y: C.int(srcY),
-		w: C.int(rect.Dx()),
-		h: C.int(rect.Dy()),
 	}
 
 	dstRect := C.SDL_Rect{
-		x: C.int(rect.Min.X + i.offsetX),
-		y: C.int(rect.Min.Y + i.offsetY),
-		w: C.int(rect.Dx()),
-		h: C.int(rect.Dy()),
+		x: C.int(i.offsetX),
+		y: C.int(i.offsetY),
+		w: C.int(i.img.Rect.Dx()),
+		h: C.int(i.img.Rect.Dy()),
 	}
-
-	pixels := unsafe.Pointer(&i.img.Pix[offset])
-	if C.SDL_UpdateTexture(i.texture, &srcRect, pixels, C.int(i.img.Stride)) != 0 {
-		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
-		return
+	srcRect := C.SDL_Rect{
+		x: 0,
+		y: 0,
+		w: dstRect.w,
+		h: dstRect.h,
 	}
 
 	if C.SDL_RenderCopy(i.window.renderer, i.texture, &srcRect, &dstRect) != 0 {
@@ -379,9 +370,26 @@ func (i *sdlTextureImageWrapper) Delete() {
 	}
 }
 
+var (
+	sdlTexturePathOnce sync.Once
+	sdlTexturePathFlag int32 = 1 // domyślnie włączone
+)
+
 func useSDLTexturePath() bool {
-	// TODO: enable texture-backed rendering after resolving flicker/glitch issues.
-	return false
+	sdlTexturePathOnce.Do(func() {
+		val := strings.TrimSpace(os.Getenv("GOKX_SDL_GPU"))
+		if val == "" {
+			return
+		}
+		val = strings.ToLower(val)
+		switch val {
+		case "0", "false", "no", "off":
+			atomic.StoreInt32(&sdlTexturePathFlag, 0)
+		default:
+			atomic.StoreInt32(&sdlTexturePathFlag, 1)
+		}
+	})
+	return atomic.LoadInt32(&sdlTexturePathFlag) == 1
 }
 
 func copyRectRGBAtoSurface(surface *C.SDL_Surface, src *image.RGBA, rect image.Rectangle, offsetX, offsetY int) {
