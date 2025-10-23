@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokx/internal/platform"
 )
 
 type SpatialStyle struct {
@@ -43,6 +44,13 @@ func (d *DrawableSpatial) attach(layer *Layer) {
 
 func (d *DrawableSpatial) detach() {
 	d.layer = nil
+}
+
+func paintDrawableSurface(surface platform.Surface, drawable *DrawableSpatial) {
+	if surface == nil {
+		return
+	}
+	paintDrawable(surface.RGBA(), drawable)
 }
 
 func paintDrawable(img *image.RGBA, drawable *DrawableSpatial) {

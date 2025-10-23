@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokx/internal/platform"
 )
 
 const defaultDirtyRectCapacity = 64
@@ -77,7 +78,7 @@ func (l *Layer) AddDrawable(drawable *DrawableSpatial) {
 	}
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
-	paintDrawable(l.Img, drawable)
+	paintDrawableSurface(platform.WrapRGBASurface(l.Img), drawable)
 	l.queueSpatialDirtyLocked(drawable.Shape)
 	l.flushLocked()
 }
@@ -190,7 +191,7 @@ func (l *Layer) render(rect image.Rectangle) {
 		if !intersects {
 			continue
 		}
-		paintDrawable(l.Img, drawable)
+		paintDrawableSurface(platform.WrapRGBASurface(l.Img), drawable)
 	}
 }
 
