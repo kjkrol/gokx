@@ -92,13 +92,8 @@ func main() {
 		50*time.Millisecond,
 		drawables,
 		func() {
-			for _, v := range polygon1.Shape.Vertices() {
-				plane.Translate(v, geometry.Vec[int]{X: -1, Y: 0})
-			}
-
-			for _, v := range polygon2.Shape.Vertices() {
-				plane.Translate(v, geometry.Vec[int]{X: 0, Y: -1})
-			}
+			polygon1.Fragments = plane.TranslateSpatial(polygon1.Shape, geometry.Vec[int]{X: -1, Y: -1})
+			polygon2.Fragments = plane.TranslateSpatial(polygon2.Shape, geometry.Vec[int]{X: 0, Y: -1})
 
 			for _, v := range pointVectors {
 				plane.Translate(v, geometry.Vec[int]{X: r.Intn(5) - 2, Y: r.Intn(5) - 2})

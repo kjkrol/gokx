@@ -13,8 +13,9 @@ type SpatialStyle struct {
 }
 
 type DrawableSpatial struct {
-	Shape geometry.Spatial[int]
-	Style SpatialStyle
+	Shape     geometry.Spatial[int]
+	Style     SpatialStyle
+	Fragments []geometry.Spatial[int]
 }
 
 var transparentColor = color.RGBA{0, 0, 0, 0}
@@ -23,8 +24,16 @@ func (d *DrawableSpatial) Draw(layer *Layer) {
 	if d == nil || d.Shape == nil {
 		return
 	}
-	d.drawSpatial(layer)
-	markSpatial(layer, d.Shape)
+	if len(d.Fragments) == 0 {
+		d.drawShape(layer, d.Shape)
+		return
+	}
+	for _, fragment := range d.Fragments {
+		if fragment == nil {
+			continue
+		}
+		d.drawShape(layer, fragment)
+	}
 }
 
 func (d *DrawableSpatial) Erase(layer *Layer) {
@@ -34,8 +43,8 @@ func (d *DrawableSpatial) Erase(layer *Layer) {
 	d.Style = original
 }
 
-func (d *DrawableSpatial) drawSpatial(layer *Layer) {
-	switch s := d.Shape.(type) {
+func (d *DrawableSpatial) drawShape(layer *Layer, shape geometry.Spatial[int]) {
+	switch s := shape.(type) {
 	case *geometry.Vec[int]:
 		drawSpatialVec(layer, *s, d.Style)
 	case *geometry.Line[int]:
@@ -45,8 +54,9 @@ func (d *DrawableSpatial) drawSpatial(layer *Layer) {
 	case *geometry.Rectangle[int]:
 		drawSpatialRectangle(layer, *s, d.Style)
 	default:
-		drawSpatialRectangle(layer, d.Shape.Bounds(), d.Style)
+		drawSpatialRectangle(layer, shape.Bounds(), d.Style)
 	}
+	markSpatial(layer, shape)
 }
 
 func drawSpatialVec(layer *Layer, v geometry.Vec[int], style SpatialStyle) {
