@@ -1,13 +1,10 @@
-//go:build !x11 && !darwin
+//go:build !x11
 
 package platform
 
 /*
 #cgo pkg-config: sdl2
 #include <SDL2/SDL.h>
-static inline void my_SDL_DestroyTexture(SDL_Texture* t) {
-    SDL_DestroyTexture(t);
-}
 static inline SDL_Surface* my_SDL_GetWindowSurface(SDL_Window* window) {
     return SDL_GetWindowSurface(window);
 }
@@ -21,11 +18,10 @@ import (
 )
 
 type sdlWindowWrapper struct {
-	window   *C.SDL_Window
-	renderer *C.SDL_Renderer
-	title    string
-	width    int
-	height   int
+	window *C.SDL_Window
+	title  string
+	width  int
+	height int
 }
 
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
@@ -40,62 +36,31 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	window := C.SDL_CreateWindow(cTitle, C.SDL_WINDOWPOS_CENTERED, C.SDL_WINDOWPOS_CENTERED,
 		C.int(conf.Width), C.int(conf.Height), C.SDL_WINDOW_SHOWN)
 	if window == nil {
+		C.SDL_Quit()
 		panic(fmt.Sprintf("SDL_CreateWindow error: %s", C.GoString(C.SDL_GetError())))
 	}
 
-	renderer := createRendererWithProbe(window)
-	if renderer == nil {
-		C.SDL_DestroyWindow(window)
-		C.SDL_Quit()
-		panic(fmt.Sprintf("SDL_CreateRenderer error: %s", C.GoString(C.SDL_GetError())))
+	return &sdlWindowWrapper{
+		window: window,
+		title:  conf.Title,
+		width:  conf.Width,
+		height: conf.Height,
 	}
-
-	return &sdlWindowWrapper{window, renderer, conf.Title, conf.Width, conf.Height}
-}
-
-func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
-	// Najpierw spróbuj akcelerowany bez vsync dla mniejszego opóźnienia
-	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
-	if renderer != nil && rendererWorks(renderer) {
-		return renderer
-	}
-	if renderer != nil {
-		C.SDL_DestroyRenderer(renderer)
-	}
-
-	// Druga próba: akcelerowany z vsync
-	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
-	if renderer != nil && rendererWorks(renderer) {
-		return renderer
-	}
-	if renderer != nil {
-		C.SDL_DestroyRenderer(renderer)
-	}
-
-	// Ostatecznie: software (działał u Ciebie na pewno)
-	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
-	return renderer
-}
-
-func rendererWorks(r *C.SDL_Renderer) bool {
-	C.SDL_SetRenderDrawColor(r, 255, 0, 0, 255)
-	C.SDL_RenderClear(r)
-	C.SDL_RenderPresent(r)
-	return true
 }
 
 func (w *sdlWindowWrapper) Show() {
 	C.SDL_ShowWindow(w.window)
 	C.SDL_EventState(C.SDL_QUIT, C.SDL_ENABLE)
 
-	// Pierwsza ramka – żeby kompozytor dostał realną zawartość.
-	C.SDL_SetRenderDrawColor(w.renderer, C.Uint8(0), C.Uint8(0), C.Uint8(0), C.Uint8(255))
-	C.SDL_RenderClear(w.renderer)
-	C.SDL_RenderPresent(w.renderer)
+	surface := C.my_SDL_GetWindowSurface(w.window)
+	if surface != nil {
+		color := C.SDL_MapRGBA(surface.format, 0, 0, 0, 255)
+		C.SDL_FillRect(surface, nil, color)
+		C.SDL_UpdateWindowSurface(w.window)
+	}
 }
 
 func (w *sdlWindowWrapper) Close() {
-	C.SDL_DestroyRenderer(w.renderer)
 	C.SDL_DestroyWindow(w.window)
 	C.SDL_Quit()
 	runtime.UnlockOSThread()
@@ -106,7 +71,7 @@ func (w *sdlWindowWrapper) NextEventTimeout(timeoutMs int) Event {
 	if C.SDL_WaitEventTimeout(&e, C.int(timeoutMs)) != 0 {
 		return convert(e)
 	}
-	return TimeoutEvent{} // brak eventu, upłynął timeout
+	return TimeoutEvent{}
 }
 
 func convert(event C.SDL_Event) Event {
@@ -173,13 +138,10 @@ func convert(event C.SDL_Event) Event {
 		if eventType >= C.SDL_USEREVENT && eventType < C.SDL_LASTEVENT {
 			return UnexpectedEvent{}
 		}
-		// fmt.Printf("Unhandled SDL event type: %d\n", eventType)
 		return UnexpectedEvent{}
 	}
 	return UnexpectedEvent{}
 }
-
-// ------------------
 
 func (w *sdlWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return newSDLImageWrapper(w, img, offsetX, offsetY)
@@ -243,7 +205,6 @@ func (i *sdlImageWrapper) Update(rect image.Rectangle) {
 }
 
 func (i *sdlImageWrapper) Delete() {
-	// nothing to free for surface path
 }
 
 func copyRectRGBAtoSurface(surface *C.SDL_Surface, src *image.RGBA, rect image.Rectangle, offsetX, offsetY int) {
@@ -296,6 +257,3 @@ func copyRectRGBAtoSurface(surface *C.SDL_Surface, src *image.RGBA, rect image.R
 		}
 	}
 }
-
-type QuitEvent struct{}
-type UnknownEvent struct{}

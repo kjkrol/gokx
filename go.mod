@@ -1,14 +1,8 @@
 module github.com/kjkrol/gokx
 
-go 1.24.0
-
-toolchain go1.24.9
+go 1.25.3
 
 require (
-	github.com/kjkrol/goka v0.0.0
-	github.com/kjkrol/gokg v1.0.8
+	github.com/kjkrol/gokg v1.0.10
+	github.com/kjkrol/gokq v1.0.5
 )
-
-replace github.com/kjkrol/gokg => ../gokg
-
-replace github.com/kjkrol/goka => ../goka
