@@ -32,6 +32,7 @@ type sdlWindowWrapper struct {
 	width          int
 	height         int
 	surfaceFactory SurfaceFactory
+	frameHasUpdates bool
 }
 
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
@@ -203,6 +204,24 @@ func (w *sdlWindowWrapper) SurfaceFactory() SurfaceFactory {
 	return w.surfaceFactory
 }
 
+func (w *sdlWindowWrapper) BeginFrame() {
+	if !useSDLTexturePath() || w.renderer == nil {
+		return
+	}
+	w.frameHasUpdates = false
+	C.SDL_SetRenderDrawColor(w.renderer, 0, 0, 0, 255)
+	C.SDL_RenderClear(w.renderer)
+}
+
+func (w *sdlWindowWrapper) EndFrame() {
+	if !useSDLTexturePath() || w.renderer == nil {
+		return
+	}
+	if w.frameHasUpdates {
+		C.SDL_RenderPresent(w.renderer)
+	}
+}
+
 type sdlSurfaceFactory struct {
 	renderer *C.SDL_Renderer
 }
@@ -341,19 +360,13 @@ func (i *sdlTextureImageWrapper) Update(rect image.Rectangle) {
 		w: C.int(i.img.Rect.Dx()),
 		h: C.int(i.img.Rect.Dy()),
 	}
-	srcRect := C.SDL_Rect{
-		x: 0,
-		y: 0,
-		w: dstRect.w,
-		h: dstRect.h,
-	}
 
-	if C.SDL_RenderCopy(i.window.renderer, i.texture, &srcRect, &dstRect) != 0 {
+	if C.SDL_RenderCopy(i.window.renderer, i.texture, nil, &dstRect) != 0 {
 		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
 		return
 	}
 
-	C.SDL_RenderPresent(i.window.renderer)
+	i.window.frameHasUpdates = true
 
 	runtime.KeepAlive(i.window)
 	runtime.KeepAlive(i.img)

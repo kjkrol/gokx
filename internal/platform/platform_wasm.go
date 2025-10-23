@@ -228,6 +228,9 @@ func (w *wasmWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, of
 	return &wasmImageWrapper{parent: w, img: img, offsetX: offsetX, offsetY: offsetY}
 }
 
+func (w *wasmWindowWrapper) BeginFrame() {}
+func (w *wasmWindowWrapper) EndFrame()   {}
+
 // ---------------- IMAGE ----------------
 
 type wasmImageWrapper struct {

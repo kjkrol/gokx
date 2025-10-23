@@ -148,11 +148,13 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 			// sprawdź czy czas na render
 			now = time.Now()
 			if !now.Before(nextRender) {
+				w.platformWinWrapper.BeginFrame()
 				w.GetDefaultPane().Refresh()
 				for _, pane := range w.panes {
 					pane.Refresh()
 				}
 				nextRender = now.Add(delay)
+				w.platformWinWrapper.EndFrame()
 			}
 		}
 	}

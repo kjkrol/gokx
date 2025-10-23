@@ -153,6 +153,9 @@ func (w *sdlWindowWrapper) SurfaceFactory() SurfaceFactory {
 	return w.surfaceFactory
 }
 
+func (w *sdlWindowWrapper) BeginFrame() {}
+func (w *sdlWindowWrapper) EndFrame()   {}
+
 type sdlImageWrapper struct {
 	window  *sdlWindowWrapper
 	offsetX int

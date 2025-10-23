@@ -146,6 +146,9 @@ func (w *sdlGPUWindowWrapper) SurfaceFactory() SurfaceFactory {
 	return w.surfaceFactory
 }
 
+func (w *sdlGPUWindowWrapper) BeginFrame() {}
+func (w *sdlGPUWindowWrapper) EndFrame()   {}
+
 type sdlGPUSurfaceFactory struct {
 	renderer *C.SDL_Renderer
 }

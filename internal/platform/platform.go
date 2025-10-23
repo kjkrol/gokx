@@ -17,6 +17,8 @@ type PlatformWindowWrapper interface {
 	NextEventTimeout(timeoutMs int) Event
 	NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper
 	SurfaceFactory() SurfaceFactory
+	BeginFrame()
+	EndFrame()
 }
 
 type PlatformImageWrapper interface {
