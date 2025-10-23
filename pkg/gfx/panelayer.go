@@ -13,6 +13,7 @@ import (
 const defaultDirtyRectCapacity = 64
 
 type Layer struct {
+	surface         platform.Surface
 	Img             *image.RGBA
 	pane            *Pane
 	mu              sync.Mutex
@@ -32,7 +33,7 @@ func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
 		dirtyCap = defaultDirtyRectCapacity
 	}
 	layer := &Layer{
-		Img:             image.NewRGBA(image.Rect(0, 0, width, height)),
+		surface:         platform.NewRGBASurface(width, height),
 		pane:            pane,
 		dirtyRectCap:    dirtyCap,
 		needsFullRender: false,
@@ -40,6 +41,7 @@ func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
 	layer.dirtyRects = make([]image.Rectangle, 0, dirtyCap)
 	layer.flushRects = make([]image.Rectangle, dirtyCap)
 	layer.drawables = make([]*DrawableSpatial, 0)
+	layer.Img = layer.surface.RGBA()
 	return layer
 }
 
@@ -54,9 +56,11 @@ func (l *Layer) GetPane() *Pane {
 func (l *Layer) SetBackground(color color.Color) {
 	l.mu.Lock()
 	l.background = color
-	draw.Draw(l.Img, l.Img.Bounds(), &image.Uniform{color}, image.Point{}, draw.Src)
+	dst := l.surface.RGBA()
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{color}, image.Point{}, draw.Src)
+	l.Img = dst
 	l.needsFullRender = true
-	l.queueDirtyRectsLocked(l.Img.Bounds())
+	l.queueDirtyRectsLocked(dst.Bounds())
 	l.flushLocked()
 }
 
@@ -162,10 +166,11 @@ func (l *Layer) render(rect image.Rectangle) {
 		l.mu.Unlock()
 	}()
 
-	if l.Img == nil {
+	if l.surface == nil {
 		return
 	}
-	area := rect.Intersect(l.Img.Bounds())
+	dst := l.surface.RGBA()
+	area := rect.Intersect(dst.Bounds())
 	if area.Empty() {
 		return
 	}
@@ -174,7 +179,8 @@ func (l *Layer) render(rect image.Rectangle) {
 	if l.background != nil {
 		src = image.NewUniform(l.background)
 	}
-	draw.Draw(l.Img, area, src, image.Point{}, draw.Src)
+	draw.Draw(dst, area, src, image.Point{}, draw.Src)
+	l.Img = dst
 
 	for _, drawable := range l.drawables {
 		if drawable == nil || drawable.Shape == nil {
@@ -191,7 +197,7 @@ func (l *Layer) render(rect image.Rectangle) {
 		if !intersects {
 			continue
 		}
-		paintDrawableSurface(platform.WrapRGBASurface(l.Img), drawable)
+		paintDrawableSurface(l.surface, drawable)
 	}
 }
 
