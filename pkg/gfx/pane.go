@@ -164,6 +164,16 @@ func (p *Pane) Refresh() {
 	if finalComposite != nil {
 		draw.Draw(p.img, minRect, finalComposite.RGBA(), minRect.Min, draw.Src)
 	}
+
+	// 🔹 Swap robimy tutaj
+	if sw, ok := p.imgSurface.(interface{ Swap() *image.RGBA }); ok {
+		front := sw.Swap()
+		if setter, ok := p.platformImgWrapper.(interface{ SetImage(*image.RGBA) }); ok {
+			setter.SetImage(front)
+		}
+	}
+
+	// 🔹 GPU update z frontbufferu
 	p.platformImgWrapper.Update(minRect)
 }
 

@@ -26,12 +26,12 @@ import (
 )
 
 type sdlWindowWrapper struct {
-	window         *C.SDL_Window
-	renderer       *C.SDL_Renderer
-	title          string
-	width          int
-	height         int
-	surfaceFactory SurfaceFactory
+	window          *C.SDL_Window
+	renderer        *C.SDL_Renderer
+	title           string
+	width           int
+	height          int
+	surfaceFactory  SurfaceFactory
 	frameHasUpdates bool
 }
 
@@ -209,6 +209,7 @@ func (w *sdlWindowWrapper) BeginFrame() {
 		return
 	}
 	w.frameHasUpdates = false
+	// // wyczyść cały ekran (czarne tło)
 	C.SDL_SetRenderDrawColor(w.renderer, 0, 0, 0, 255)
 	C.SDL_RenderClear(w.renderer)
 }
@@ -233,20 +234,31 @@ func newSDLSurfaceFactory(renderer *C.SDL_Renderer) SurfaceFactory {
 func (f *sdlSurfaceFactory) New(width, height int) Surface {
 	return &sdlTextureSurface{
 		renderer: f.renderer,
-		img:      image.NewRGBA(image.Rect(0, 0, width, height)),
+		buffer:   NewDoubleBuffer(width, height),
 	}
 }
 
+//-----------------------------------------------------------------------
+
 type sdlTextureSurface struct {
 	renderer *C.SDL_Renderer
-	img      *image.RGBA
+	buffer   *DoubleBuffer
 }
 
-func (s *sdlTextureSurface) ColorModel() color.Model     { return s.img.ColorModel() }
-func (s *sdlTextureSurface) Bounds() image.Rectangle     { return s.img.Bounds() }
-func (s *sdlTextureSurface) At(x, y int) color.Color     { return s.img.At(x, y) }
-func (s *sdlTextureSurface) Set(x, y int, c color.Color) { s.img.Set(x, y, c) }
-func (s *sdlTextureSurface) RGBA() *image.RGBA           { return s.img }
+func (s *sdlTextureSurface) ColorModel() color.Model { return s.buffer.back.ColorModel() }
+func (s *sdlTextureSurface) Bounds() image.Rectangle { return s.buffer.back.Bounds() }
+func (s *sdlTextureSurface) At(x, y int) color.Color { return s.buffer.back.At(x, y) }
+func (s *sdlTextureSurface) Set(x, y int, c color.Color) {
+	s.buffer.back.Set(x, y, c)
+}
+func (s *sdlTextureSurface) RGBA() *image.RGBA { return s.buffer.back }
+
+// To dodajemy – żeby Pane.Refresh mogło zrobić swap:
+func (s *sdlTextureSurface) Swap() *image.RGBA {
+	return s.buffer.Swap()
+}
+
+//-----------------------------------------------------------------------
 
 type sdlImageWrapper struct {
 	window  *sdlWindowWrapper
@@ -309,10 +321,12 @@ func (i *sdlImageWrapper) Delete() {
 	// nothing to free for surface path
 }
 
+// ------------------------------------------------------------------
+
 type sdlTextureImageWrapper struct {
 	window  *sdlWindowWrapper
 	texture *C.SDL_Texture
-	img     *image.RGBA
+	img     *image.RGBA // <-- to ustawiamy z Pane.Refresh (frontbuffer)
 	offsetX int
 	offsetY int
 }
@@ -328,7 +342,12 @@ func newSDLTextureImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, 
 		return nil
 	}
 
-	texture := C.SDL_CreateTexture(win.renderer, C.SDL_PIXELFORMAT_RGBA32, C.SDL_TEXTUREACCESS_STREAMING, C.int(width), C.int(height))
+	texture := C.SDL_CreateTexture(
+		win.renderer,
+		C.SDL_PIXELFORMAT_RGBA32,
+		C.SDL_TEXTUREACCESS_STREAMING,
+		C.int(width), C.int(height),
+	)
 	if texture == nil {
 		fmt.Println("SDL_CreateTexture error:", C.GoString(C.SDL_GetError()))
 		return nil
@@ -337,10 +356,15 @@ func newSDLTextureImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, 
 	return &sdlTextureImageWrapper{
 		window:  win,
 		texture: texture,
-		img:     img,
+		img:     img, // początkowo startowy bufor
 		offsetX: offsetX,
 		offsetY: offsetY,
 	}
+}
+
+// Setter – Pane.Refresh ustawia tu frontbuffer po Swap
+func (i *sdlTextureImageWrapper) SetImage(img *image.RGBA) {
+	i.img = img
 }
 
 func (i *sdlTextureImageWrapper) Update(rect image.Rectangle) {
@@ -348,28 +372,44 @@ func (i *sdlTextureImageWrapper) Update(rect image.Rectangle) {
 		return
 	}
 
-	pixels := unsafe.Pointer(&i.img.Pix[0])
-	if C.SDL_UpdateTexture(i.texture, nil, pixels, C.int(i.img.Stride)) != 0 {
+	rect = rect.Intersect(i.img.Rect)
+	if rect.Empty() {
+		return
+	}
+
+	srcX := rect.Min.X - i.img.Rect.Min.X
+	srcY := rect.Min.Y - i.img.Rect.Min.Y
+	offset := srcY*i.img.Stride + srcX*4
+	if offset < 0 || offset >= len(i.img.Pix) {
+		return
+	}
+
+	srcRect := C.SDL_Rect{
+		x: C.int(srcX),
+		y: C.int(srcY),
+		w: C.int(rect.Dx()),
+		h: C.int(rect.Dy()),
+	}
+
+	pixels := unsafe.Pointer(&i.img.Pix[offset])
+	if C.SDL_UpdateTexture(i.texture, &srcRect, pixels, C.int(i.img.Stride)) != 0 {
 		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
 		return
 	}
 
 	dstRect := C.SDL_Rect{
-		x: C.int(i.offsetX),
-		y: C.int(i.offsetY),
-		w: C.int(i.img.Rect.Dx()),
-		h: C.int(i.img.Rect.Dy()),
+		x: C.int(rect.Min.X + i.offsetX),
+		y: C.int(rect.Min.Y + i.offsetY),
+		w: srcRect.w,
+		h: srcRect.h,
 	}
 
-	if C.SDL_RenderCopy(i.window.renderer, i.texture, nil, &dstRect) != 0 {
+	if C.SDL_RenderCopy(i.window.renderer, i.texture, &srcRect, &dstRect) != 0 {
 		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
 		return
 	}
 
 	i.window.frameHasUpdates = true
-
-	runtime.KeepAlive(i.window)
-	runtime.KeepAlive(i.img)
 }
 
 func (i *sdlTextureImageWrapper) Delete() {
@@ -383,6 +423,8 @@ func (i *sdlTextureImageWrapper) Delete() {
 	}
 }
 
+// ----------------------------------------------------------------------------
+
 var (
 	sdlTexturePathOnce sync.Once
 	sdlTexturePathFlag int32 = 1 // domyślnie włączone
@@ -391,15 +433,14 @@ var (
 func useSDLTexturePath() bool {
 	sdlTexturePathOnce.Do(func() {
 		val := strings.TrimSpace(os.Getenv("GOKX_SDL_GPU"))
-		if val == "" {
-			return
-		}
 		val = strings.ToLower(val)
 		switch val {
 		case "0", "false", "no", "off":
 			atomic.StoreInt32(&sdlTexturePathFlag, 0)
 		default:
-			atomic.StoreInt32(&sdlTexturePathFlag, 1)
+			if val != "" {
+				atomic.StoreInt32(&sdlTexturePathFlag, 1)
+			}
 		}
 	})
 	return atomic.LoadInt32(&sdlTexturePathFlag) == 1
