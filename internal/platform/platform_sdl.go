@@ -1,4 +1,4 @@
-//go:build (linux || windows) && !x11 && cgo
+//go:build (linux || windows || darwin) && !x11 && cgo
 
 package platform
 
@@ -26,12 +26,12 @@ import (
 )
 
 type sdlWindowWrapper struct {
-	window         *C.SDL_Window
-	renderer       *C.SDL_Renderer
-	title          string
-	width          int
-	height         int
-	surfaceFactory SurfaceFactory
+	window          *C.SDL_Window
+	renderer        *C.SDL_Renderer
+	title           string
+	width           int
+	height          int
+	surfaceFactory  SurfaceFactory
 	frameHasUpdates bool
 }
 
