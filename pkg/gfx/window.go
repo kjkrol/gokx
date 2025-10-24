@@ -33,6 +33,8 @@ type Window struct {
 	wg                 sync.WaitGroup
 	ctx                context.Context
 	cancel             context.CancelFunc
+
+	updates chan func()
 }
 
 const maxEventWait = 50 * time.Millisecond
@@ -42,6 +44,7 @@ func NewWindow(conf WindowConfig) *Window {
 	window := Window{
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
+		updates:            make(chan func(), 1024),
 	}
 	window.surfaceFactory = window.platformWinWrapper.SurfaceFactory()
 	if window.surfaceFactory == nil {
@@ -148,6 +151,17 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 			// sprawdź czy czas na render
 			now = time.Now()
 			if !now.Before(nextRender) {
+				// 🔹 wykonaj wszystkie oczekujące update’y
+				for {
+					select {
+					case upd := <-w.updates:
+						upd()
+					default:
+						goto doneUpdates
+					}
+				}
+			doneUpdates:
+
 				w.platformWinWrapper.BeginFrame()
 				w.GetDefaultPane().Refresh()
 				for _, pane := range w.panes {
@@ -161,5 +175,5 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 }
 
 func (w *Window) StartAnimation(animation *Animation) {
-	animation.Run(w.ctx, 0, &w.wg)
+	animation.Run(w.ctx, 0, &w.wg, w.updates)
 }

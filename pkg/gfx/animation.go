@@ -24,29 +24,34 @@ func NewAnimation(layer *Layer, duration time.Duration, drawables []*DrawableSpa
 	}
 }
 
-func (a *Animation) Run(ctx context.Context, id int, wg *sync.WaitGroup) {
+func (a *Animation) Run(ctx context.Context, id int, wg *sync.WaitGroup, updates chan<- func()) {
 	if a.runnung {
 		return
 	}
 	a.runnung = true
 	wg.Add(1)
+
 	go func() {
 		defer wg.Done()
 
 		ticker := time.NewTicker(a.Duration)
 		defer ticker.Stop()
 
-		for range ticker.C {
+		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
-				if a.Layer == nil || a.Evolve == nil {
-					continue
+			case <-ticker.C:
+				// zamiast dotykać warstwy tutaj,
+				// wrzucamy callback do kanału
+				updates <- func() {
+					if a.Layer == nil || a.Evolve == nil {
+						return
+					}
+					a.Layer.Batch(func() {
+						a.Evolve()
+					})
 				}
-				a.Layer.Batch(func() {
-					a.Evolve()
-				})
 			}
 		}
 	}()

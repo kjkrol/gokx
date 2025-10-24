@@ -11,6 +11,15 @@ static inline void my_SDL_DestroyTexture(SDL_Texture* t) {
 static inline SDL_Surface* my_SDL_GetWindowSurface(SDL_Window* window) {
     return SDL_GetWindowSurface(window);
 }
+
+static inline const char* my_SDL_GetRendererInfo(SDL_Renderer* r, Uint32 *flags) {
+    SDL_RendererInfo info;
+    if (SDL_GetRendererInfo(r, &info) != 0) {
+        return NULL;
+    }
+    *flags = info.flags;
+    return info.name;
+}
 */
 import "C"
 import (
@@ -68,25 +77,68 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 }
 
 func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
-	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
+	// Najbardziej „wypasiona” konfiguracja
+	renderer := C.SDL_CreateRenderer(window, -1,
+		C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC|C.SDL_RENDERER_TARGETTEXTURE)
 	if renderer != nil && rendererWorks(renderer) {
-		fmt.Println("SDL renderer backend: accelerated")
+		printRendererInfo(renderer)
 		return renderer
 	}
+
+	// Spróbuj bez TARGETTEXTURE
 	if renderer != nil {
-		renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
+		C.SDL_DestroyRenderer(renderer)
 	}
+	renderer = C.SDL_CreateRenderer(window, -1,
+		C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
 	if renderer != nil && rendererWorks(renderer) {
-		fmt.Println("SDL renderer backend: accelerated+vsync")
+		printRendererInfo(renderer)
 		return renderer
 	}
+
+	// Spróbuj samo ACCELERATED
 	if renderer != nil {
-		renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
+		C.SDL_DestroyRenderer(renderer)
 	}
+	renderer = C.SDL_CreateRenderer(window, -1,
+		C.SDL_RENDERER_ACCELERATED)
+	if renderer != nil && rendererWorks(renderer) {
+		printRendererInfo(renderer)
+		return renderer
+	}
+
+	// Ostatecznie software
 	if renderer != nil {
-		fmt.Println("SDL renderer backend: software")
+		C.SDL_DestroyRenderer(renderer)
+	}
+	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
+	if renderer != nil {
+		printRendererInfo(renderer)
 	}
 	return renderer
+}
+
+func printRendererInfo(r *C.SDL_Renderer) {
+	var flags C.Uint32
+	name := C.my_SDL_GetRendererInfo(r, &flags)
+	if name == nil {
+		fmt.Println("SDL_GetRendererInfo error:", C.GoString(C.SDL_GetError()))
+		return
+	}
+
+	fmt.Printf("SDL renderer backend: %s\n", C.GoString(name))
+	if flags&C.SDL_RENDERER_ACCELERATED != 0 {
+		fmt.Println(" - accelerated (GPU)")
+	}
+	if flags&C.SDL_RENDERER_SOFTWARE != 0 {
+		fmt.Println(" - software (CPU)")
+	}
+	if flags&C.SDL_RENDERER_PRESENTVSYNC != 0 {
+		fmt.Println(" - vsync enabled")
+	}
+	if flags&C.SDL_RENDERER_TARGETTEXTURE != 0 {
+		fmt.Println(" - target texture supported")
+	}
 }
 
 func rendererWorks(r *C.SDL_Renderer) bool {
