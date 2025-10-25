@@ -32,7 +32,7 @@ func main() {
 	layerTree := window.GetDefaultPane().GetLayer(2)
 
 	plane := geometry.NewCyclicBoundedPlane(800, 800)
-	qtree := quadtree.NewQuadTree(plane, geometry.BoundingBoxDistanceForPlane(plane))
+	qtree := quadtree.NewQuadTree(plane)
 	defer qtree.Close()
 
 	ctx := Context{
