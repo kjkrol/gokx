@@ -6,7 +6,7 @@ import (
 	"image/draw"
 	"sync"
 
-	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokg/pkg/geometry/spatial"
 	"github.com/kjkrol/gokx/internal/platform"
 )
 
@@ -214,7 +214,7 @@ func (l *Layer) queueRectsLocked(rects ...image.Rectangle) {
 	l.queueDirtyRectsLocked(rects...)
 }
 
-func (l *Layer) queueSpatialDirtyLocked(shape geometry.Spatial[int]) {
+func (l *Layer) queueSpatialDirtyLocked(shape spatial.Spatial[int]) {
 	rects := spatialRectangles(shape)
 	l.queueDirtyRectsLocked(rects...)
 }

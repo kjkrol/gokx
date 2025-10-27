@@ -5,6 +5,7 @@ import (
 	"image/color"
 
 	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokg/pkg/geometry/spatial"
 	"github.com/kjkrol/gokq/pkg/quadtree"
 	"github.com/kjkrol/gokx/pkg/gfx"
 )
@@ -67,10 +68,10 @@ type Context struct {
 }
 
 type quadTreeItem struct {
-	spatial geometry.Spatial[int]
+	spatial spatial.Spatial[int]
 }
 
-func (qt *quadTreeItem) Value() geometry.Spatial[int] {
+func (qt *quadTreeItem) Value() spatial.Spatial[int] {
 	return qt.spatial
 }
 
@@ -122,7 +123,7 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := &geometry.Vec[int]{X: px, Y: py}
+	vec := &spatial.Vec[int]{X: px, Y: py}
 	drawable := &gfx.DrawableSpatial{
 		Shape: vec,
 		Style: gfx.SpatialStyle{Stroke: color.White},

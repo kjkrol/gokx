@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"sort"
 
-	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokg/pkg/geometry/spatial"
 	"github.com/kjkrol/gokx/internal/platform"
 )
 
@@ -15,7 +15,7 @@ type SpatialStyle struct {
 }
 
 type DrawableSpatial struct {
-	Shape geometry.Spatial[int]
+	Shape spatial.Spatial[int]
 	Style SpatialStyle
 	layer *Layer
 }
@@ -25,7 +25,7 @@ var (
 	transparentFill  = image.NewUniform(transparentColor)
 )
 
-func (d *DrawableSpatial) Update(mutator func(shape geometry.Spatial[int])) {
+func (d *DrawableSpatial) Update(mutator func(shape spatial.Spatial[int])) {
 	if d == nil || mutator == nil {
 		return
 	}
@@ -60,18 +60,18 @@ func paintDrawableSurface(surface platform.Surface, drawable *DrawableSpatial) {
 	}
 }
 
-func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geometry.Spatial[int]) {
+func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape spatial.Spatial[int]) {
 	switch s := shape.(type) {
-	case *geometry.Vec[int]:
+	case *spatial.Vec[int]:
 		point := rasterizeVec(*s)
 		paintVecSurface(surface, point, style)
-	case *geometry.Line[int]:
+	case *spatial.Line[int]:
 		points := rasterizeLine(vecToImagePoint(s.Start), vecToImagePoint(s.End))
 		paintLineSurface(surface, points, style)
-	case *geometry.Polygon[int]:
+	case *spatial.Polygon[int]:
 		points := rasterizePolygon(s.Points())
 		paintPolygonSurface(surface, points, style)
-	case *geometry.Rectangle[int]:
+	case *spatial.Rectangle[int]:
 		points := rasterizeRectangle(*s)
 		paintPolygonSurface(surface, points, style)
 	default:
@@ -80,7 +80,7 @@ func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geome
 	}
 }
 
-func rasterizeVec(v geometry.Vec[int]) image.Point {
+func rasterizeVec(v spatial.Vec[int]) image.Point {
 	return vecToImagePoint(v)
 }
 
@@ -102,7 +102,7 @@ func paintLineSurface(surface platform.Surface, points []image.Point, style Spat
 	paintLinePixelsSurface(surface, points, style.Stroke)
 }
 
-func rasterizePolygon(vertices []geometry.Vec[int]) []image.Point {
+func rasterizePolygon(vertices []spatial.Vec[int]) []image.Point {
 	if len(vertices) == 0 {
 		return nil
 	}
@@ -121,7 +121,7 @@ func paintPolygonSurface(surface platform.Surface, points []image.Point, style S
 	}
 }
 
-func rasterizeRectangle(rect geometry.Rectangle[int]) []image.Point {
+func rasterizeRectangle(rect spatial.Rectangle[int]) []image.Point {
 	topLeft := rect.TopLeft
 	bottomRight := rect.BottomRight
 	return []image.Point{
@@ -231,7 +231,7 @@ func bresenhamLine(start, end image.Point) []image.Point {
 	return points
 }
 
-func geometryRectToImageRect(r geometry.Rectangle[int]) image.Rectangle {
+func geometryRectToImageRect(r spatial.Rectangle[int]) image.Rectangle {
 	minX := r.TopLeft.X
 	minY := r.TopLeft.Y
 	maxX := r.BottomRight.X
@@ -245,11 +245,11 @@ func geometryRectToImageRect(r geometry.Rectangle[int]) image.Rectangle {
 	return image.Rect(minX, minY, maxX+1, maxY+1)
 }
 
-func vecToImagePoint(v geometry.Vec[int]) image.Point {
+func vecToImagePoint(v spatial.Vec[int]) image.Point {
 	return image.Pt(v.X, v.Y)
 }
 
-func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
+func vecsToImagePoints(vecs []spatial.Vec[int]) []image.Point {
 	points := make([]image.Point, len(vecs))
 	for i, v := range vecs {
 		points[i] = vecToImagePoint(v)
@@ -257,7 +257,7 @@ func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
 	return points
 }
 
-func spatialRectangles(shape geometry.Spatial[int]) []image.Rectangle {
+func spatialRectangles(shape spatial.Spatial[int]) []image.Rectangle {
 	if shape == nil {
 		return nil
 	}
