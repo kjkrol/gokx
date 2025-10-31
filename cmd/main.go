@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kjkrol/gokg/pkg/geometry"
-	"github.com/kjkrol/gokg/pkg/geometry/spatial"
 	"github.com/kjkrol/gokx/pkg/gfx"
 )
 
@@ -33,10 +32,10 @@ func main() {
 
 	layer2 := window.GetDefaultPane().GetLayer(2)
 
-	polygon1Shape := spatial.NewPolygon(
-		spatial.Vec[int]{X: 150, Y: 100},
-		spatial.Vec[int]{X: 200, Y: 200},
-		spatial.Vec[int]{X: 100, Y: 200},
+	polygon1Shape := geometry.NewPolygon(
+		geometry.Vec[int]{X: 150, Y: 100},
+		geometry.Vec[int]{X: 200, Y: 200},
+		geometry.Vec[int]{X: 100, Y: 200},
 	)
 	polygon1 := &gfx.DrawableSpatial{
 		Shape: &polygon1Shape,
@@ -46,10 +45,7 @@ func main() {
 		},
 	}
 
-	rectShape := spatial.NewRectangle(
-		spatial.Vec[int]{X: 100, Y: 100},
-		spatial.Vec[int]{X: 200, Y: 200},
-	)
+	rectShape := geometry.NewRect(geometry.NewVec(100, 100), 100, 100)
 	polygon2 := &gfx.DrawableSpatial{
 		Shape: &rectShape,
 		Style: gfx.SpatialStyle{
@@ -63,7 +59,7 @@ func main() {
 	for i := 0; i < 1000; i++ {
 		randX := r.Intn(800)
 		randY := r.Intn(800)
-		vec := &spatial.Vec[int]{X: randX, Y: randY}
+		vec := &geometry.Vec[int]{X: randX, Y: randY}
 		drawable := &gfx.DrawableSpatial{
 			Shape: vec,
 			Style: gfx.SpatialStyle{Stroke: color.White},
@@ -91,19 +87,19 @@ func main() {
 		50*time.Millisecond,
 		drawables,
 		func() {
-			polygon1.Update(func(shape spatial.Spatial[int]) {
-				plane.TranslateSpatial(shape, spatial.Vec[int]{X: 1, Y: 1})
+			polygon1.Update(func(shape geometry.Shape[int]) {
+				plane.Translate(shape, geometry.Vec[int]{X: 1, Y: 1})
 			})
-			polygon2.Update(func(shape spatial.Spatial[int]) {
-				plane.TranslateSpatial(shape, spatial.Vec[int]{X: 0, Y: -1})
+			polygon2.Update(func(shape geometry.Shape[int]) {
+				plane.Translate(shape, geometry.Vec[int]{X: 0, Y: -1})
 			})
 
 			for _, drawable := range pointDrawables {
 				dx := r.Intn(5) - 2
 				dy := r.Intn(5) - 2
-				drawable.Update(func(shape spatial.Spatial[int]) {
-					if vec, ok := shape.(*spatial.Vec[int]); ok {
-						plane.Translate(vec, spatial.Vec[int]{X: dx, Y: dy})
+				drawable.Update(func(shape geometry.Shape[int]) {
+					if vec, ok := shape.(*geometry.Vec[int]); ok {
+						plane.Translate(vec, geometry.Vec[int]{X: dx, Y: dy})
 					}
 				})
 			}
@@ -178,7 +174,7 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := &spatial.Vec[int]{X: px, Y: py}
+	vec := &geometry.Vec[int]{X: px, Y: py}
 	drawable := &gfx.DrawableSpatial{
 		Shape: vec,
 		Style: gfx.SpatialStyle{Stroke: color.White},

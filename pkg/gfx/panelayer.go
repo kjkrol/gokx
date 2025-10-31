@@ -6,7 +6,7 @@ import (
 	"image/draw"
 	"sync"
 
-	"github.com/kjkrol/gokg/pkg/geometry/spatial"
+	"github.com/kjkrol/gokg/pkg/geometry"
 	"github.com/kjkrol/gokx/internal/platform"
 )
 
@@ -137,12 +137,12 @@ func (l *Layer) ModifyDrawable(drawable *DrawableSpatial, mutate func()) {
 		mutate()
 		return
 	}
-	oldRects := spatialRectangles(drawable.Shape)
+	oldRects := shapeToImageRectangle(drawable.Shape)
 	l.mu.Unlock()
 
 	mutate()
 
-	newRects := spatialRectangles(drawable.Shape)
+	newRects := shapeToImageRectangle(drawable.Shape)
 
 	l.mu.Lock()
 	if drawable.layer != l {
@@ -186,7 +186,7 @@ func (l *Layer) render(rect image.Rectangle) {
 		if drawable == nil || drawable.Shape == nil {
 			continue
 		}
-		rects := spatialRectangles(drawable.Shape)
+		rects := shapeToImageRectangle(drawable.Shape)
 		intersects := false
 		for _, r := range rects {
 			if !r.Intersect(area).Empty() {
@@ -214,8 +214,8 @@ func (l *Layer) queueRectsLocked(rects ...image.Rectangle) {
 	l.queueDirtyRectsLocked(rects...)
 }
 
-func (l *Layer) queueSpatialDirtyLocked(shape spatial.Spatial[int]) {
-	rects := spatialRectangles(shape)
+func (l *Layer) queueSpatialDirtyLocked(shape geometry.Shape[int]) {
+	rects := shapeToImageRectangle(shape)
 	l.queueDirtyRectsLocked(rects...)
 }
 

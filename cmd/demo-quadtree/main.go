@@ -5,7 +5,6 @@ import (
 	"image/color"
 
 	"github.com/kjkrol/gokg/pkg/geometry"
-	"github.com/kjkrol/gokg/pkg/geometry/spatial"
 	"github.com/kjkrol/gokq/pkg/quadtree"
 	"github.com/kjkrol/gokx/pkg/gfx"
 )
@@ -68,11 +67,11 @@ type Context struct {
 }
 
 type quadTreeItem struct {
-	spatial spatial.Spatial[int]
+	shape geometry.Shape[int]
 }
 
-func (qt *quadTreeItem) Value() spatial.Spatial[int] {
-	return qt.spatial
+func (qt *quadTreeItem) Value() geometry.AABB[int] {
+	return qt.shape.Bounds()
 }
 
 func handleEvent(event gfx.Event, ctx *Context) {
@@ -123,13 +122,13 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := &spatial.Vec[int]{X: px, Y: py}
+	vec := &geometry.Vec[int]{X: px, Y: py}
 	drawable := &gfx.DrawableSpatial{
 		Shape: vec,
 		Style: gfx.SpatialStyle{Stroke: color.White},
 	}
 	layer1.AddDrawable(drawable)
-	item := &quadTreeItem{spatial: vec}
+	item := &quadTreeItem{shape: vec}
 	if ctx.quadTree != nil {
 		ctx.quadTree.Add(item)
 	}
@@ -149,7 +148,7 @@ func renderQuadTree(ctx *Context) {
 	outline := color.RGBA{0, 200, 255, 255}
 	for i := range leafs {
 		rect := leafs[i]
-		rectCopy := rect
+		rectCopy := rect.ToPolygon()
 		drawable := &gfx.DrawableSpatial{
 			Shape: &rectCopy,
 			Style: gfx.SpatialStyle{
