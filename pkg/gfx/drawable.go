@@ -14,8 +14,8 @@ type SpatialStyle struct {
 	Stroke color.Color
 }
 
-type DrawableSpatial struct {
-	Shape geometry.Shape[int]
+type Drawable struct {
+	Shape geometry.AABB[int]
 	Style SpatialStyle
 	layer *Layer
 }
@@ -25,55 +25,48 @@ var (
 	transparentFill  = image.NewUniform(transparentColor)
 )
 
-func (d *DrawableSpatial) Update(mutator func(shape geometry.Shape[int])) {
+func (d *Drawable) Update(mutator func(shape *geometry.AABB[int])) {
 	if d == nil || mutator == nil {
 		return
 	}
 	if d.layer == nil {
-		mutator(d.Shape)
+		mutator(&d.Shape)
 		return
 	}
 	d.layer.ModifyDrawable(d, func() {
-		mutator(d.Shape)
+		mutator(&d.Shape)
 	})
 }
 
-func (d *DrawableSpatial) attach(layer *Layer) {
+func (d *Drawable) attach(layer *Layer) {
 	d.layer = layer
 }
 
-func (d *DrawableSpatial) detach() {
+func (d *Drawable) detach() {
 	d.layer = nil
 }
 
-func paintDrawableSurface(surface platform.Surface, drawable *DrawableSpatial) {
-	if surface == nil || drawable == nil || drawable.Shape == nil {
+func paintDrawableSurface(surface platform.Surface, drawable *Drawable) {
+	if surface == nil || drawable == nil {
 		return
 	}
 	paintShapeSurface(surface, drawable.Style, drawable.Shape)
 	fragments := drawable.Shape.Fragments()
 	for _, fragment := range fragments {
-		if fragment == nil {
-			continue
-		}
 		paintShapeSurface(surface, drawable.Style, fragment)
 	}
 }
 
-func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geometry.Shape[int]) {
-	switch s := shape.(type) {
-	case *geometry.Vec[int]:
-		point := rasterizeVec(*s)
-		paintVecSurface(surface, point, style)
-	case *geometry.Line[int]:
-		points := rasterizeLine(vecToImagePoint(s.Start), vecToImagePoint(s.End))
-		paintLineSurface(surface, points, style)
-	case *geometry.Polygon[int]:
-		points := rasterizePolygon(s.Points())
-		paintPolygonSurface(surface, points, style)
-	default:
-		// do nothing
-	}
+func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geometry.AABB[int]) {
+	aaabbPoints := make([]geometry.Vec[int], 4)
+	aaabbPoints[0] = shape.BottomRight
+	aaabbPoints[1] = geometry.NewVec(shape.BottomRight.X, shape.TopLeft.Y)
+	aaabbPoints[2] = shape.TopLeft
+	aaabbPoints[3] = geometry.NewVec(shape.TopLeft.X, shape.BottomRight.Y)
+
+	points := rasterizePolygon(aaabbPoints)
+	paintPolygonSurface(surface, points, style)
+
 }
 
 func rasterizeVec(v geometry.Vec[int]) image.Point {
@@ -242,12 +235,9 @@ func aabbToImageRect(r geometry.AABB[int]) image.Rectangle {
 	return image.Rect(minX, minY, maxX+1, maxY+1)
 }
 
-func shapeToImageRectangle(shape geometry.Shape[int]) []image.Rectangle {
-	if shape == nil {
-		return nil
-	}
+func shapeToImageRectangle(shape geometry.AABB[int]) []image.Rectangle {
 	rects := make([]image.Rectangle, 0, 1)
-	mainRect := aabbToImageRect(shape.Bounds())
+	mainRect := aabbToImageRect(shape)
 	if !mainRect.Empty() {
 		rects = append(rects, mainRect)
 	}
@@ -256,10 +246,7 @@ func shapeToImageRectangle(shape geometry.Shape[int]) []image.Rectangle {
 		return rects
 	}
 	for _, fragment := range fragments {
-		if fragment == nil {
-			continue
-		}
-		rect := aabbToImageRect(fragment.Bounds())
+		rect := aabbToImageRect(fragment)
 		if rect.Empty() {
 			continue
 		}

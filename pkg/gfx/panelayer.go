@@ -23,7 +23,7 @@ type Layer struct {
 	flushRects      []image.Rectangle
 	batchedRects    []image.Rectangle
 	batchDepth      int
-	drawables       []*DrawableSpatial
+	drawables       []*Drawable
 	background      color.Color
 	needsFullRender bool
 }
@@ -40,7 +40,7 @@ func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
 	}
 	layer.dirtyRects = make([]image.Rectangle, 0, dirtyCap)
 	layer.flushRects = make([]image.Rectangle, dirtyCap)
-	layer.drawables = make([]*DrawableSpatial, 0)
+	layer.drawables = make([]*Drawable, 0)
 	layer.Img = layer.surface.RGBA()
 	return layer
 }
@@ -64,7 +64,7 @@ func (l *Layer) SetBackground(color color.Color) {
 	l.flushLocked()
 }
 
-func (l *Layer) AddDrawable(drawable *DrawableSpatial) {
+func (l *Layer) AddDrawable(drawable *Drawable) {
 	if drawable == nil {
 		return
 	}
@@ -87,7 +87,7 @@ func (l *Layer) AddDrawable(drawable *DrawableSpatial) {
 	l.flushLocked()
 }
 
-func (l *Layer) RemoveDrawable(drawable *DrawableSpatial) {
+func (l *Layer) RemoveDrawable(drawable *Drawable) {
 	if drawable == nil {
 		return
 	}
@@ -114,15 +114,15 @@ func (l *Layer) RemoveDrawable(drawable *DrawableSpatial) {
 	l.flushLocked()
 }
 
-func (l *Layer) Drawables() []*DrawableSpatial {
+func (l *Layer) Drawables() []*Drawable {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	out := make([]*DrawableSpatial, len(l.drawables))
+	out := make([]*Drawable, len(l.drawables))
 	copy(out, l.drawables)
 	return out
 }
 
-func (l *Layer) ModifyDrawable(drawable *DrawableSpatial, mutate func()) {
+func (l *Layer) ModifyDrawable(drawable *Drawable, mutate func()) {
 	if drawable == nil || mutate == nil {
 		return
 	}
@@ -183,7 +183,7 @@ func (l *Layer) render(rect image.Rectangle) {
 	l.Img = dst
 
 	for _, drawable := range l.drawables {
-		if drawable == nil || drawable.Shape == nil {
+		if drawable == nil {
 			continue
 		}
 		rects := shapeToImageRectangle(drawable.Shape)
@@ -214,7 +214,7 @@ func (l *Layer) queueRectsLocked(rects ...image.Rectangle) {
 	l.queueDirtyRectsLocked(rects...)
 }
 
-func (l *Layer) queueSpatialDirtyLocked(shape geometry.Shape[int]) {
+func (l *Layer) queueSpatialDirtyLocked(shape geometry.AABB[int]) {
 	rects := shapeToImageRectangle(shape)
 	l.queueDirtyRectsLocked(rects...)
 }

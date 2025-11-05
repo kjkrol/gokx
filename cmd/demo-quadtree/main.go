@@ -63,15 +63,15 @@ type Context struct {
 	plane          geometry.Plane[int]
 	quadTree       *quadtree.QuadTree[int]
 	quadTreeLayer  *gfx.Layer
-	quadTreeFrames []*gfx.DrawableSpatial
+	quadTreeFrames []*gfx.Drawable
 }
 
 type quadTreeItem struct {
-	shape geometry.Shape[int]
+	shape geometry.AABB[int]
 }
 
-func (qt *quadTreeItem) Value() geometry.AABB[int] {
-	return qt.shape.Bounds()
+func (qt *quadTreeItem) Bound() geometry.AABB[int] {
+	return qt.shape
 }
 
 func handleEvent(event gfx.Event, ctx *Context) {
@@ -122,8 +122,8 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := &geometry.Vec[int]{X: px, Y: py}
-	drawable := &gfx.DrawableSpatial{
+	vec := geometry.Vec[int]{X: px, Y: py}.Bounds()
+	drawable := &gfx.Drawable{
 		Shape: vec,
 		Style: gfx.SpatialStyle{Stroke: color.White},
 	}
@@ -144,13 +144,13 @@ func renderQuadTree(ctx *Context) {
 	}
 	ctx.quadTreeFrames = ctx.quadTreeFrames[:0]
 
-	leafs := ctx.quadTree.LeafRectangles()
+	leafs := ctx.quadTree.LeafBounds()
 	outline := color.RGBA{0, 200, 255, 255}
 	for i := range leafs {
 		rect := leafs[i]
-		rectCopy := rect.ToPolygon()
-		drawable := &gfx.DrawableSpatial{
-			Shape: &rectCopy,
+		rectCopy := rect
+		drawable := &gfx.Drawable{
+			Shape: rectCopy,
 			Style: gfx.SpatialStyle{
 				Stroke: outline,
 			},
