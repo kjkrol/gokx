@@ -7,11 +7,13 @@ import (
 	"sync"
 
 	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokx/internal/platform"
 )
 
 const defaultDirtyRectCapacity = 64
 
 type Layer struct {
+	surface         platform.Surface
 	Img             *image.RGBA
 	pane            *Pane
 	mu              sync.Mutex
@@ -21,7 +23,7 @@ type Layer struct {
 	flushRects      []image.Rectangle
 	batchedRects    []image.Rectangle
 	batchDepth      int
-	drawables       []*DrawableSpatial
+	drawables       []*Drawable
 	background      color.Color
 	needsFullRender bool
 }
@@ -31,14 +33,15 @@ func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
 		dirtyCap = defaultDirtyRectCapacity
 	}
 	layer := &Layer{
-		Img:             image.NewRGBA(image.Rect(0, 0, width, height)),
+		surface:         platform.NewRGBASurface(width, height),
 		pane:            pane,
 		dirtyRectCap:    dirtyCap,
 		needsFullRender: false,
 	}
 	layer.dirtyRects = make([]image.Rectangle, 0, dirtyCap)
 	layer.flushRects = make([]image.Rectangle, dirtyCap)
-	layer.drawables = make([]*DrawableSpatial, 0)
+	layer.drawables = make([]*Drawable, 0)
+	layer.Img = layer.surface.RGBA()
 	return layer
 }
 
@@ -53,13 +56,15 @@ func (l *Layer) GetPane() *Pane {
 func (l *Layer) SetBackground(color color.Color) {
 	l.mu.Lock()
 	l.background = color
-	draw.Draw(l.Img, l.Img.Bounds(), &image.Uniform{color}, image.Point{}, draw.Src)
+	dst := l.surface.RGBA()
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{color}, image.Point{}, draw.Src)
+	l.Img = dst
 	l.needsFullRender = true
-	l.queueDirtyRectsLocked(l.Img.Bounds())
+	l.queueDirtyRectsLocked(dst.Bounds())
 	l.flushLocked()
 }
 
-func (l *Layer) AddDrawable(drawable *DrawableSpatial) {
+func (l *Layer) AddDrawable(drawable *Drawable) {
 	if drawable == nil {
 		return
 	}
@@ -77,12 +82,12 @@ func (l *Layer) AddDrawable(drawable *DrawableSpatial) {
 	}
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
-	paintDrawable(l.Img, drawable)
+	paintDrawableSurface(l.surface, drawable)
 	l.queueSpatialDirtyLocked(drawable.Shape)
 	l.flushLocked()
 }
 
-func (l *Layer) RemoveDrawable(drawable *DrawableSpatial) {
+func (l *Layer) RemoveDrawable(drawable *Drawable) {
 	if drawable == nil {
 		return
 	}
@@ -109,15 +114,15 @@ func (l *Layer) RemoveDrawable(drawable *DrawableSpatial) {
 	l.flushLocked()
 }
 
-func (l *Layer) Drawables() []*DrawableSpatial {
+func (l *Layer) Drawables() []*Drawable {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	out := make([]*DrawableSpatial, len(l.drawables))
+	out := make([]*Drawable, len(l.drawables))
 	copy(out, l.drawables)
 	return out
 }
 
-func (l *Layer) ModifyDrawable(drawable *DrawableSpatial, mutate func()) {
+func (l *Layer) ModifyDrawable(drawable *Drawable, mutate func()) {
 	if drawable == nil || mutate == nil {
 		return
 	}
@@ -132,12 +137,12 @@ func (l *Layer) ModifyDrawable(drawable *DrawableSpatial, mutate func()) {
 		mutate()
 		return
 	}
-	oldRects := spatialRectangles(drawable.Shape)
+	oldRects := shapeToImageRectangle(drawable.Shape)
 	l.mu.Unlock()
 
 	mutate()
 
-	newRects := spatialRectangles(drawable.Shape)
+	newRects := shapeToImageRectangle(drawable.Shape)
 
 	l.mu.Lock()
 	if drawable.layer != l {
@@ -161,10 +166,11 @@ func (l *Layer) render(rect image.Rectangle) {
 		l.mu.Unlock()
 	}()
 
-	if l.Img == nil {
+	if l.surface == nil {
 		return
 	}
-	area := rect.Intersect(l.Img.Bounds())
+	dst := l.surface.RGBA()
+	area := rect.Intersect(dst.Bounds())
 	if area.Empty() {
 		return
 	}
@@ -173,13 +179,14 @@ func (l *Layer) render(rect image.Rectangle) {
 	if l.background != nil {
 		src = image.NewUniform(l.background)
 	}
-	draw.Draw(l.Img, area, src, image.Point{}, draw.Src)
+	draw.Draw(dst, area, src, image.Point{}, draw.Src)
+	l.Img = dst
 
 	for _, drawable := range l.drawables {
-		if drawable == nil || drawable.Shape == nil {
+		if drawable == nil {
 			continue
 		}
-		rects := spatialRectangles(drawable.Shape)
+		rects := shapeToImageRectangle(drawable.Shape)
 		intersects := false
 		for _, r := range rects {
 			if !r.Intersect(area).Empty() {
@@ -190,7 +197,7 @@ func (l *Layer) render(rect image.Rectangle) {
 		if !intersects {
 			continue
 		}
-		paintDrawable(l.Img, drawable)
+		paintDrawableSurface(l.surface, drawable)
 	}
 }
 
@@ -207,8 +214,8 @@ func (l *Layer) queueRectsLocked(rects ...image.Rectangle) {
 	l.queueDirtyRectsLocked(rects...)
 }
 
-func (l *Layer) queueSpatialDirtyLocked(shape geometry.Spatial[int]) {
-	rects := spatialRectangles(shape)
+func (l *Layer) queueSpatialDirtyLocked(shape geometry.AABB[int]) {
+	rects := shapeToImageRectangle(shape)
 	l.queueDirtyRectsLocked(rects...)
 }
 

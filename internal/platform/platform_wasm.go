@@ -10,11 +10,12 @@ import (
 )
 
 type wasmWindowWrapper struct {
-	canvas js.Value
-	ctx    js.Value
-	events chan Event
-	conf   WindowConfig
-	closed bool
+	canvas         js.Value
+	ctx            js.Value
+	events         chan Event
+	conf           WindowConfig
+	closed         bool
+	surfaceFactory SurfaceFactory
 
 	funcs   []js.Func
 	removes []struct {
@@ -46,10 +47,11 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 	ctx := canvas.Call("getContext", "2d")
 
 	w := &wasmWindowWrapper{
-		canvas: canvas,
-		ctx:    ctx,
-		events: make(chan Event, 64),
-		conf:   conf,
+		canvas:         canvas,
+		ctx:            ctx,
+		events:         make(chan Event, 64),
+		conf:           conf,
+		surfaceFactory: DefaultSurfaceFactory(),
 	}
 
 	// helper do listenerów
@@ -218,9 +220,16 @@ func (w *wasmWindowWrapper) NextEventTimeout(timeoutMs int) Event {
 	}
 }
 
+func (w *wasmWindowWrapper) SurfaceFactory() SurfaceFactory {
+	return w.surfaceFactory
+}
+
 func (w *wasmWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return &wasmImageWrapper{parent: w, img: img, offsetX: offsetX, offsetY: offsetY}
 }
+
+func (w *wasmWindowWrapper) BeginFrame() {}
+func (w *wasmWindowWrapper) EndFrame()   {}
 
 // ---------------- IMAGE ----------------
 

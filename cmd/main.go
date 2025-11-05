@@ -32,25 +32,19 @@ func main() {
 
 	layer2 := window.GetDefaultPane().GetLayer(2)
 
-	polygon1Shape := geometry.NewPolygon(
-		geometry.Vec[int]{X: 150, Y: 100},
-		geometry.Vec[int]{X: 200, Y: 200},
-		geometry.Vec[int]{X: 100, Y: 200},
-	)
-	polygon1 := &gfx.DrawableSpatial{
-		Shape: &polygon1Shape,
+	polygon1Shape := geometry.NewAABB(geometry.NewVec(50, 50), 50, 50)
+
+	polygon1 := &gfx.Drawable{
+		Shape: polygon1Shape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
 		},
 	}
 
-	rectShape := geometry.NewRectangle(
-		geometry.Vec[int]{X: 100, Y: 100},
-		geometry.Vec[int]{X: 200, Y: 200},
-	)
-	polygon2 := &gfx.DrawableSpatial{
-		Shape: &rectShape,
+	rectShape := geometry.NewAABB(geometry.NewVec(150, 150), 100, 100)
+	polygon2 := &gfx.Drawable{
+		Shape: rectShape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
@@ -58,13 +52,13 @@ func main() {
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	pointDrawables := make([]*gfx.DrawableSpatial, 0, 1000)
+	pointDrawables := make([]*gfx.Drawable, 0, 1000)
 	for i := 0; i < 1000; i++ {
 		randX := r.Intn(800)
 		randY := r.Intn(800)
 		vec := &geometry.Vec[int]{X: randX, Y: randY}
-		drawable := &gfx.DrawableSpatial{
-			Shape: vec,
+		drawable := &gfx.Drawable{
+			Shape: vec.Bounds(),
 			Style: gfx.SpatialStyle{Stroke: color.White},
 		}
 		pointDrawables = append(pointDrawables, drawable)
@@ -81,7 +75,7 @@ func main() {
 
 	plane := geometry.NewCyclicBoundedPlane(800, 800)
 
-	drawables := make([]*gfx.DrawableSpatial, 0, len(pointDrawables)+2)
+	drawables := make([]*gfx.Drawable, 0, len(pointDrawables)+2)
 	drawables = append(drawables, pointDrawables...)
 	drawables = append(drawables, polygon1, polygon2)
 
@@ -90,20 +84,19 @@ func main() {
 		50*time.Millisecond,
 		drawables,
 		func() {
-			polygon1.Update(func(shape geometry.Spatial[int]) {
-				plane.TranslateSpatial(shape, geometry.Vec[int]{X: 1, Y: 1})
+			polygon1.Update(func(shape *geometry.AABB[int]) {
+				plane.Translate(shape, geometry.Vec[int]{X: 1, Y: 1})
 			})
-			polygon2.Update(func(shape geometry.Spatial[int]) {
-				plane.TranslateSpatial(shape, geometry.Vec[int]{X: 0, Y: -1})
+			polygon2.Update(func(shape *geometry.AABB[int]) {
+				plane.Translate(shape, geometry.Vec[int]{X: 0, Y: -1})
 			})
 
 			for _, drawable := range pointDrawables {
 				dx := r.Intn(5) - 2
 				dy := r.Intn(5) - 2
-				drawable.Update(func(shape geometry.Spatial[int]) {
-					if vec, ok := shape.(*geometry.Vec[int]); ok {
-						plane.Translate(vec, geometry.Vec[int]{X: dx, Y: dy})
-					}
+				drawable.Update(func(shape *geometry.AABB[int]) {
+					plane.Translate(shape, geometry.Vec[int]{X: dx, Y: dy})
+
 				})
 			}
 		},
@@ -177,8 +170,8 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := &geometry.Vec[int]{X: px, Y: py}
-	drawable := &gfx.DrawableSpatial{
+	vec := geometry.Vec[int]{X: px, Y: py}.Bounds()
+	drawable := &gfx.Drawable{
 		Shape: vec,
 		Style: gfx.SpatialStyle{Stroke: color.White},
 	}

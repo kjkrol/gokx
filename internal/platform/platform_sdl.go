@@ -1,4 +1,4 @@
-//go:build (linux || windows) && !x11 && cgo
+//go:build (linux || windows || darwin) && !x11 && cgo
 
 package platform
 
@@ -11,21 +11,37 @@ static inline void my_SDL_DestroyTexture(SDL_Texture* t) {
 static inline SDL_Surface* my_SDL_GetWindowSurface(SDL_Window* window) {
     return SDL_GetWindowSurface(window);
 }
+
+static inline const char* my_SDL_GetRendererInfo(SDL_Renderer* r, Uint32 *flags) {
+    SDL_RendererInfo info;
+    if (SDL_GetRendererInfo(r, &info) != 0) {
+        return NULL;
+    }
+    *flags = info.flags;
+    return info.name;
+}
 */
 import "C"
 import (
 	"fmt"
 	"image"
+	"image/color"
+	"os"
 	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
 type sdlWindowWrapper struct {
-	window   *C.SDL_Window
-	renderer *C.SDL_Renderer
-	title    string
-	width    int
-	height   int
+	window          *C.SDL_Window
+	renderer        *C.SDL_Renderer
+	title           string
+	width           int
+	height          int
+	surfaceFactory  SurfaceFactory
+	frameHasUpdates bool
 }
 
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
@@ -50,29 +66,79 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		panic(fmt.Sprintf("SDL_CreateRenderer error: %s", C.GoString(C.SDL_GetError())))
 	}
 
-	return &sdlWindowWrapper{window, renderer, conf.Title, conf.Width, conf.Height}
+	return &sdlWindowWrapper{
+		window:         window,
+		renderer:       renderer,
+		title:          conf.Title,
+		width:          conf.Width,
+		height:         conf.Height,
+		surfaceFactory: newSDLSurfaceFactory(renderer),
+	}
 }
 
 func createRendererWithProbe(window *C.SDL_Window) *C.SDL_Renderer {
-	renderer := C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED)
+	// Najbardziej „wypasiona” konfiguracja
+	renderer := C.SDL_CreateRenderer(window, -1,
+		C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC|C.SDL_RENDERER_TARGETTEXTURE)
 	if renderer != nil && rendererWorks(renderer) {
-		fmt.Println("SDL renderer backend: accelerated")
+		printRendererInfo(renderer)
 		return renderer
 	}
+
+	// Spróbuj bez TARGETTEXTURE
 	if renderer != nil {
-		renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
+		C.SDL_DestroyRenderer(renderer)
 	}
+	renderer = C.SDL_CreateRenderer(window, -1,
+		C.SDL_RENDERER_ACCELERATED|C.SDL_RENDERER_PRESENTVSYNC)
 	if renderer != nil && rendererWorks(renderer) {
-		fmt.Println("SDL renderer backend: accelerated+vsync")
+		printRendererInfo(renderer)
 		return renderer
 	}
+
+	// Spróbuj samo ACCELERATED
 	if renderer != nil {
-		renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
+		C.SDL_DestroyRenderer(renderer)
 	}
+	renderer = C.SDL_CreateRenderer(window, -1,
+		C.SDL_RENDERER_ACCELERATED)
+	if renderer != nil && rendererWorks(renderer) {
+		printRendererInfo(renderer)
+		return renderer
+	}
+
+	// Ostatecznie software
 	if renderer != nil {
-		fmt.Println("SDL renderer backend: software")
+		C.SDL_DestroyRenderer(renderer)
+	}
+	renderer = C.SDL_CreateRenderer(window, -1, C.SDL_RENDERER_SOFTWARE)
+	if renderer != nil {
+		printRendererInfo(renderer)
 	}
 	return renderer
+}
+
+func printRendererInfo(r *C.SDL_Renderer) {
+	var flags C.Uint32
+	name := C.my_SDL_GetRendererInfo(r, &flags)
+	if name == nil {
+		fmt.Println("SDL_GetRendererInfo error:", C.GoString(C.SDL_GetError()))
+		return
+	}
+
+	fmt.Printf("SDL renderer backend: %s\n", C.GoString(name))
+	if flags&C.SDL_RENDERER_ACCELERATED != 0 {
+		fmt.Println(" - accelerated (GPU)")
+	}
+	if flags&C.SDL_RENDERER_SOFTWARE != 0 {
+		fmt.Println(" - software (CPU)")
+	}
+	if flags&C.SDL_RENDERER_PRESENTVSYNC != 0 {
+		fmt.Println(" - vsync enabled")
+	}
+	if flags&C.SDL_RENDERER_TARGETTEXTURE != 0 {
+		fmt.Println(" - target texture supported")
+	}
 }
 
 func rendererWorks(r *C.SDL_Renderer) bool {
@@ -180,8 +246,59 @@ func convert(event C.SDL_Event) Event {
 // ------------------
 
 func (w *sdlWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
+	if wrapper := newSDLTextureImageWrapper(w, img, offsetX, offsetY); wrapper != nil {
+		return wrapper
+	}
 	return newSDLImageWrapper(w, img, offsetX, offsetY)
 }
+
+func (w *sdlWindowWrapper) SurfaceFactory() SurfaceFactory {
+	return w.surfaceFactory
+}
+
+func (w *sdlWindowWrapper) BeginFrame() {
+	if !useSDLTexturePath() || w.renderer == nil {
+		return
+	}
+	w.frameHasUpdates = false
+	C.SDL_SetRenderDrawColor(w.renderer, 0, 0, 0, 255)
+	C.SDL_RenderClear(w.renderer)
+}
+
+func (w *sdlWindowWrapper) EndFrame() {
+	if !useSDLTexturePath() || w.renderer == nil {
+		return
+	}
+	if w.frameHasUpdates {
+		C.SDL_RenderPresent(w.renderer)
+	}
+}
+
+type sdlSurfaceFactory struct {
+	renderer *C.SDL_Renderer
+}
+
+func newSDLSurfaceFactory(renderer *C.SDL_Renderer) SurfaceFactory {
+	return &sdlSurfaceFactory{renderer: renderer}
+}
+
+func (f *sdlSurfaceFactory) New(width, height int) Surface {
+	return &sdlTextureSurface{
+		renderer: f.renderer,
+		img:      image.NewRGBA(image.Rect(0, 0, width, height)),
+	}
+}
+
+type sdlTextureSurface struct {
+	renderer *C.SDL_Renderer
+	img      *image.RGBA
+}
+
+func (s *sdlTextureSurface) ColorModel() color.Model     { return s.img.ColorModel() }
+func (s *sdlTextureSurface) Bounds() image.Rectangle     { return s.img.Bounds() }
+func (s *sdlTextureSurface) At(x, y int) color.Color     { return s.img.At(x, y) }
+func (s *sdlTextureSurface) Set(x, y int, c color.Color) { s.img.Set(x, y, c) }
+func (s *sdlTextureSurface) RGBA() *image.RGBA           { return s.img }
 
 type sdlImageWrapper struct {
 	window  *sdlWindowWrapper
@@ -242,6 +359,102 @@ func (i *sdlImageWrapper) Update(rect image.Rectangle) {
 
 func (i *sdlImageWrapper) Delete() {
 	// nothing to free for surface path
+}
+
+type sdlTextureImageWrapper struct {
+	window  *sdlWindowWrapper
+	texture *C.SDL_Texture
+	img     *image.RGBA
+	offsetX int
+	offsetY int
+}
+
+func newSDLTextureImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, offsetY int) *sdlTextureImageWrapper {
+	if !useSDLTexturePath() || win == nil || win.renderer == nil || img == nil {
+		return nil
+	}
+
+	width := img.Rect.Dx()
+	height := img.Rect.Dy()
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+
+	texture := C.SDL_CreateTexture(win.renderer, C.SDL_PIXELFORMAT_RGBA32, C.SDL_TEXTUREACCESS_STREAMING, C.int(width), C.int(height))
+	if texture == nil {
+		fmt.Println("SDL_CreateTexture error:", C.GoString(C.SDL_GetError()))
+		return nil
+	}
+
+	return &sdlTextureImageWrapper{
+		window:  win,
+		texture: texture,
+		img:     img,
+		offsetX: offsetX,
+		offsetY: offsetY,
+	}
+}
+
+func (i *sdlTextureImageWrapper) Update(rect image.Rectangle) {
+	if i == nil || i.texture == nil || i.img == nil {
+		return
+	}
+
+	pixels := unsafe.Pointer(&i.img.Pix[0])
+	if C.SDL_UpdateTexture(i.texture, nil, pixels, C.int(i.img.Stride)) != 0 {
+		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
+		return
+	}
+
+	dstRect := C.SDL_Rect{
+		x: C.int(i.offsetX),
+		y: C.int(i.offsetY),
+		w: C.int(i.img.Rect.Dx()),
+		h: C.int(i.img.Rect.Dy()),
+	}
+
+	if C.SDL_RenderCopy(i.window.renderer, i.texture, nil, &dstRect) != 0 {
+		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
+		return
+	}
+
+	i.window.frameHasUpdates = true
+
+	runtime.KeepAlive(i.window)
+	runtime.KeepAlive(i.img)
+}
+
+func (i *sdlTextureImageWrapper) Delete() {
+	if i != nil && i.texture != nil {
+		C.my_SDL_DestroyTexture(i.texture)
+		i.texture = nil
+	}
+	if i != nil {
+		i.img = nil
+		i.window = nil
+	}
+}
+
+var (
+	sdlTexturePathOnce sync.Once
+	sdlTexturePathFlag int32 = 1 // domyślnie włączone
+)
+
+func useSDLTexturePath() bool {
+	sdlTexturePathOnce.Do(func() {
+		val := strings.TrimSpace(os.Getenv("GOKX_SDL_GPU"))
+		if val == "" {
+			return
+		}
+		val = strings.ToLower(val)
+		switch val {
+		case "0", "false", "no", "off":
+			atomic.StoreInt32(&sdlTexturePathFlag, 0)
+		default:
+			atomic.StoreInt32(&sdlTexturePathFlag, 1)
+		}
+	})
+	return atomic.LoadInt32(&sdlTexturePathFlag) == 1
 }
 
 func copyRectRGBAtoSurface(surface *C.SDL_Surface, src *image.RGBA, rect image.Rectangle, offsetX, offsetY int) {

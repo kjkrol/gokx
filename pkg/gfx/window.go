@@ -25,6 +25,7 @@ func (w WindowConfig) convert() platform.WindowConfig {
 
 type Window struct {
 	platformWinWrapper platform.PlatformWindowWrapper
+	surfaceFactory     platform.SurfaceFactory
 	defaultPane        *Pane
 	panes              map[string]*Pane
 	rerfreshing        bool
@@ -32,6 +33,8 @@ type Window struct {
 	wg                 sync.WaitGroup
 	ctx                context.Context
 	cancel             context.CancelFunc
+
+	updates chan func()
 }
 
 const maxEventWait = 50 * time.Millisecond
@@ -41,6 +44,11 @@ func NewWindow(conf WindowConfig) *Window {
 	window := Window{
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
+		updates:            make(chan func(), 1024),
+	}
+	window.surfaceFactory = window.platformWinWrapper.SurfaceFactory()
+	if window.surfaceFactory == nil {
+		window.surfaceFactory = platform.DefaultSurfaceFactory()
 	}
 	window.defaultPane = newPane(
 		&PaneConfig{
@@ -49,6 +57,7 @@ func NewWindow(conf WindowConfig) *Window {
 			OffsetX: 0,
 			OffsetY: 0,
 		},
+		window.surfaceFactory,
 		window.platformWinWrapper.NewPlatformImageWrapper)
 	window.ctx, window.cancel = context.WithCancel(context.Background())
 	window.rerfreshing = false
@@ -56,7 +65,7 @@ func NewWindow(conf WindowConfig) *Window {
 }
 
 func (w *Window) AddPane(name string, conf *PaneConfig) *Pane {
-	pane := newPane(conf, w.platformWinWrapper.NewPlatformImageWrapper)
+	pane := newPane(conf, w.surfaceFactory, w.platformWinWrapper.NewPlatformImageWrapper)
 	w.panes[name] = pane
 	return pane
 }
@@ -142,16 +151,29 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 			// sprawdź czy czas na render
 			now = time.Now()
 			if !now.Before(nextRender) {
+				// 🔹 wykonaj wszystkie oczekujące update’y
+				for {
+					select {
+					case upd := <-w.updates:
+						upd()
+					default:
+						goto doneUpdates
+					}
+				}
+			doneUpdates:
+
+				w.platformWinWrapper.BeginFrame()
 				w.GetDefaultPane().Refresh()
 				for _, pane := range w.panes {
 					pane.Refresh()
 				}
 				nextRender = now.Add(delay)
+				w.platformWinWrapper.EndFrame()
 			}
 		}
 	}
 }
 
 func (w *Window) StartAnimation(animation *Animation) {
-	animation.Run(w.ctx, 0, &w.wg)
+	animation.Run(w.ctx, 0, &w.wg, w.updates)
 }
