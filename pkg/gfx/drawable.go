@@ -15,7 +15,7 @@ type SpatialStyle struct {
 }
 
 type Drawable struct {
-	Shape geometry.AABB[int]
+	geometry.PlaneBox[int]
 	Style SpatialStyle
 	layer *Layer
 }
@@ -25,16 +25,16 @@ var (
 	transparentFill  = image.NewUniform(transparentColor)
 )
 
-func (d *Drawable) Update(mutator func(shape *geometry.AABB[int])) {
+func (d *Drawable) Update(mutator func(shape *geometry.PlaneBox[int])) {
 	if d == nil || mutator == nil {
 		return
 	}
 	if d.layer == nil {
-		mutator(&d.Shape)
+		mutator(&d.PlaneBox)
 		return
 	}
 	d.layer.ModifyDrawable(d, func() {
-		mutator(&d.Shape)
+		mutator(&d.PlaneBox)
 	})
 }
 
@@ -50,14 +50,14 @@ func paintDrawableSurface(surface platform.Surface, drawable *Drawable) {
 	if surface == nil || drawable == nil {
 		return
 	}
-	paintShapeSurface(surface, drawable.Style, drawable.Shape)
-	fragments := drawable.Shape.Fragments()
+	paintShapeSurface(surface, drawable.Style, drawable.PlaneBox.BoundingBox)
+	fragments := drawable.PlaneBox.Fragments()
 	for _, fragment := range fragments {
 		paintShapeSurface(surface, drawable.Style, fragment)
 	}
 }
 
-func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geometry.AABB[int]) {
+func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geometry.BoundingBox[int]) {
 	aaabbPoints := make([]geometry.Vec[int], 4)
 	aaabbPoints[0] = shape.BottomRight
 	aaabbPoints[1] = geometry.NewVec(shape.BottomRight.X, shape.TopLeft.Y)
@@ -221,7 +221,7 @@ func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
 	return points
 }
 
-func aabbToImageRect(r geometry.AABB[int]) image.Rectangle {
+func aabbToImageRect(r geometry.BoundingBox[int]) image.Rectangle {
 	minX := r.TopLeft.X
 	minY := r.TopLeft.Y
 	maxX := r.BottomRight.X
@@ -235,9 +235,9 @@ func aabbToImageRect(r geometry.AABB[int]) image.Rectangle {
 	return image.Rect(minX, minY, maxX+1, maxY+1)
 }
 
-func shapeToImageRectangle(shape geometry.AABB[int]) []image.Rectangle {
+func shapeToImageRectangle(shape geometry.PlaneBox[int]) []image.Rectangle {
 	rects := make([]image.Rectangle, 0, 1)
-	mainRect := aabbToImageRect(shape)
+	mainRect := aabbToImageRect(shape.BoundingBox)
 	if !mainRect.Empty() {
 		rects = append(rects, mainRect)
 	}

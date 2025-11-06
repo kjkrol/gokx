@@ -32,19 +32,19 @@ func main() {
 
 	layer2 := window.GetDefaultPane().GetLayer(2)
 
-	polygon1Shape := geometry.NewAABB(geometry.NewVec(50, 50), 50, 50)
+	polygon1Shape := geometry.NewPlaneBox(geometry.NewVec(50, 50), 50, 50)
 
 	polygon1 := &gfx.Drawable{
-		Shape: polygon1Shape,
+		PlaneBox: polygon1Shape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
 		},
 	}
 
-	rectShape := geometry.NewAABB(geometry.NewVec(150, 150), 100, 100)
+	rectShape := geometry.NewPlaneBox(geometry.NewVec(150, 150), 100, 100)
 	polygon2 := &gfx.Drawable{
-		Shape: rectShape,
+		PlaneBox: rectShape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
@@ -53,13 +53,15 @@ func main() {
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	pointDrawables := make([]*gfx.Drawable, 0, 1000)
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		randX := r.Intn(800)
 		randY := r.Intn(800)
-		vec := &geometry.Vec[int]{X: randX, Y: randY}
+		vec := geometry.NewVec(randX, randY)
+		vecBox := geometry.NewBoundingBoxAround(vec, 0)
+		planeBox := geometry.NewPlaneBoxFromBox(vecBox)
 		drawable := &gfx.Drawable{
-			Shape: vec.Bounds(),
-			Style: gfx.SpatialStyle{Stroke: color.White},
+			PlaneBox: planeBox,
+			Style:    gfx.SpatialStyle{Stroke: color.White},
 		}
 		pointDrawables = append(pointDrawables, drawable)
 		layer2.AddDrawable(drawable)
@@ -84,17 +86,17 @@ func main() {
 		50*time.Millisecond,
 		drawables,
 		func() {
-			polygon1.Update(func(shape *geometry.AABB[int]) {
+			polygon1.Update(func(shape *geometry.PlaneBox[int]) {
 				plane.Translate(shape, geometry.Vec[int]{X: 1, Y: 1})
 			})
-			polygon2.Update(func(shape *geometry.AABB[int]) {
+			polygon2.Update(func(shape *geometry.PlaneBox[int]) {
 				plane.Translate(shape, geometry.Vec[int]{X: 0, Y: -1})
 			})
 
 			for _, drawable := range pointDrawables {
 				dx := r.Intn(5) - 2
 				dy := r.Intn(5) - 2
-				drawable.Update(func(shape *geometry.AABB[int]) {
+				drawable.Update(func(shape *geometry.PlaneBox[int]) {
 					plane.Translate(shape, geometry.Vec[int]{X: dx, Y: dy})
 
 				})
@@ -170,10 +172,12 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := geometry.Vec[int]{X: px, Y: py}.Bounds()
+	vec := geometry.NewVec(px, py)
+	vecBox := geometry.NewBoundingBoxAround(vec, 0)
+	planeBox := geometry.NewPlaneBoxFromBox(vecBox)
 	drawable := &gfx.Drawable{
-		Shape: vec,
-		Style: gfx.SpatialStyle{Stroke: color.White},
+		PlaneBox: planeBox,
+		Style:    gfx.SpatialStyle{Stroke: color.White},
 	}
 	layer1.AddDrawable(drawable)
 }

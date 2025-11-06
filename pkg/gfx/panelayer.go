@@ -75,7 +75,7 @@ func (l *Layer) AddDrawable(drawable *Drawable) {
 	l.mu.Lock()
 	for _, existing := range l.drawables {
 		if existing == drawable {
-			l.queueSpatialDirtyLocked(drawable.Shape)
+			l.queueSpatialDirtyLocked(drawable.PlaneBox)
 			l.flushLocked()
 			return
 		}
@@ -83,7 +83,7 @@ func (l *Layer) AddDrawable(drawable *Drawable) {
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
 	paintDrawableSurface(l.surface, drawable)
-	l.queueSpatialDirtyLocked(drawable.Shape)
+	l.queueSpatialDirtyLocked(drawable.PlaneBox)
 	l.flushLocked()
 }
 
@@ -110,7 +110,7 @@ func (l *Layer) RemoveDrawable(drawable *Drawable) {
 	}
 	drawable.detach()
 	l.needsFullRender = true
-	l.queueSpatialDirtyLocked(drawable.Shape)
+	l.queueSpatialDirtyLocked(drawable.PlaneBox)
 	l.flushLocked()
 }
 
@@ -137,12 +137,12 @@ func (l *Layer) ModifyDrawable(drawable *Drawable, mutate func()) {
 		mutate()
 		return
 	}
-	oldRects := shapeToImageRectangle(drawable.Shape)
+	oldRects := shapeToImageRectangle(drawable.PlaneBox)
 	l.mu.Unlock()
 
 	mutate()
 
-	newRects := shapeToImageRectangle(drawable.Shape)
+	newRects := shapeToImageRectangle(drawable.PlaneBox)
 
 	l.mu.Lock()
 	if drawable.layer != l {
@@ -186,7 +186,7 @@ func (l *Layer) render(rect image.Rectangle) {
 		if drawable == nil {
 			continue
 		}
-		rects := shapeToImageRectangle(drawable.Shape)
+		rects := shapeToImageRectangle(drawable.PlaneBox)
 		intersects := false
 		for _, r := range rects {
 			if !r.Intersect(area).Empty() {
@@ -214,7 +214,7 @@ func (l *Layer) queueRectsLocked(rects ...image.Rectangle) {
 	l.queueDirtyRectsLocked(rects...)
 }
 
-func (l *Layer) queueSpatialDirtyLocked(shape geometry.AABB[int]) {
+func (l *Layer) queueSpatialDirtyLocked(shape geometry.PlaneBox[int]) {
 	rects := shapeToImageRectangle(shape)
 	l.queueDirtyRectsLocked(rects...)
 }

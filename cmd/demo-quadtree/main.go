@@ -32,7 +32,7 @@ func main() {
 	layerTree := window.GetDefaultPane().GetLayer(2)
 
 	plane := geometry.NewCyclicBoundedPlane(800, 800)
-	qtree := quadtree.NewQuadTree(plane)
+	qtree := quadtree.NewQuadTree[int, int](plane)
 	defer qtree.Close()
 
 	ctx := Context{
@@ -61,17 +61,23 @@ type Context struct {
 	lmbPressed     bool
 	window         *gfx.Window
 	plane          geometry.Plane[int]
-	quadTree       *quadtree.QuadTree[int]
+	quadTree       *quadtree.QuadTree[int, int]
 	quadTreeLayer  *gfx.Layer
 	quadTreeFrames []*gfx.Drawable
+	counter        int
 }
 
 type quadTreeItem struct {
-	shape geometry.AABB[int]
+	shape geometry.BoundingBox[int]
+	id    int
 }
 
-func (qt *quadTreeItem) Bound() geometry.AABB[int] {
+func (qt *quadTreeItem) Bound() geometry.BoundingBox[int] {
 	return qt.shape
+}
+
+func (qt quadTreeItem) Id() int {
+	return qt.id
 }
 
 func handleEvent(event gfx.Event, ctx *Context) {
@@ -122,13 +128,17 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := geometry.Vec[int]{X: px, Y: py}.Bounds()
+	vec := geometry.Vec[int]{X: px, Y: py}
+	vecBox := geometry.NewBoundingBoxAround(vec, 0)
+	planeBox := geometry.NewPlaneBoxFromBox(vecBox)
 	drawable := &gfx.Drawable{
-		Shape: vec,
-		Style: gfx.SpatialStyle{Stroke: color.White},
+		PlaneBox: planeBox,
+		Style:    gfx.SpatialStyle{Stroke: color.White},
 	}
 	layer1.AddDrawable(drawable)
-	item := &quadTreeItem{shape: vec}
+	id := ctx.counter + 1
+	ctx.counter = id
+	item := &quadTreeItem{shape: planeBox.BoundingBox, id: id}
 	if ctx.quadTree != nil {
 		ctx.quadTree.Add(item)
 	}
@@ -150,7 +160,7 @@ func renderQuadTree(ctx *Context) {
 		rect := leafs[i]
 		rectCopy := rect
 		drawable := &gfx.Drawable{
-			Shape: rectCopy,
+			PlaneBox: geometry.NewPlaneBoxFromBox(rectCopy),
 			Style: gfx.SpatialStyle{
 				Stroke: outline,
 			},
