@@ -58,13 +58,13 @@ func paintDrawableSurface(surface platform.Surface, drawable *Drawable) {
 }
 
 func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geometry.BoundingBox[int]) {
-	aaabbPoints := make([]geometry.Vec[int], 4)
-	aaabbPoints[0] = shape.BottomRight
-	aaabbPoints[1] = geometry.NewVec(shape.BottomRight.X, shape.TopLeft.Y)
-	aaabbPoints[2] = shape.TopLeft
-	aaabbPoints[3] = geometry.NewVec(shape.TopLeft.X, shape.BottomRight.Y)
+	boxPoints := make([]geometry.Vec[int], 4)
+	boxPoints[0] = shape.BottomRight
+	boxPoints[1] = geometry.NewVec(shape.BottomRight.X, shape.TopLeft.Y)
+	boxPoints[2] = shape.TopLeft
+	boxPoints[3] = geometry.NewVec(shape.TopLeft.X, shape.BottomRight.Y)
 
-	points := rasterizePolygon(aaabbPoints)
+	points := rasterizePolygon(boxPoints)
 	paintPolygonSurface(surface, points, style)
 
 }
@@ -221,11 +221,11 @@ func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
 	return points
 }
 
-func aabbToImageRect(r geometry.BoundingBox[int]) image.Rectangle {
-	minX := r.TopLeft.X
-	minY := r.TopLeft.Y
-	maxX := r.BottomRight.X
-	maxY := r.BottomRight.Y
+func boxToImageRect(box geometry.BoundingBox[int]) image.Rectangle {
+	minX := box.TopLeft.X
+	minY := box.TopLeft.Y
+	maxX := box.BottomRight.X
+	maxY := box.BottomRight.Y
 	if maxX < minX {
 		maxX = minX
 	}
@@ -235,18 +235,18 @@ func aabbToImageRect(r geometry.BoundingBox[int]) image.Rectangle {
 	return image.Rect(minX, minY, maxX+1, maxY+1)
 }
 
-func shapeToImageRectangle(shape geometry.PlaneBox[int]) []image.Rectangle {
+func shapeToImageRectangle(planeBox geometry.PlaneBox[int]) []image.Rectangle {
 	rects := make([]image.Rectangle, 0, 1)
-	mainRect := aabbToImageRect(shape.BoundingBox)
+	mainRect := boxToImageRect(planeBox.BoundingBox)
 	if !mainRect.Empty() {
 		rects = append(rects, mainRect)
 	}
-	fragments := shape.Fragments()
+	fragments := planeBox.Fragments()
 	if len(fragments) == 0 {
 		return rects
 	}
 	for _, fragment := range fragments {
-		rect := aabbToImageRect(fragment)
+		rect := boxToImageRect(fragment)
 		if rect.Empty() {
 			continue
 		}

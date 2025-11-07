@@ -1,6 +1,6 @@
-github.com/kjkrol/gokg v1.1.2 h1:YwF87+xkXloyJ1jRpS9EQAua0kFjeJmf6zYuLRmmoH0=
-github.com/kjkrol/gokg v1.1.2/go.mod h1:xK5iL2V3JvYxfZyGRn/ApHbp+ibJJhwllfz2T4QM41o=
-github.com/kjkrol/gokq v1.1.2 h1:0VKVq2jub+Ls+iZquRX3/LCRWZ5XXdaNwnO+d2PMFRE=
-github.com/kjkrol/gokq v1.1.2/go.mod h1:q4wcLm5UgMJly2GkOsnnwz1l1HqFBKOxFmnHsOjHqRo=
+github.com/kjkrol/gokg v1.1.4 h1:x/mTTFYkLRBzEQxS/PxdxAtUovejGSKs1cxMLaLdlP4=
+github.com/kjkrol/gokg v1.1.4/go.mod h1:xK5iL2V3JvYxfZyGRn/ApHbp+ibJJhwllfz2T4QM41o=
+github.com/kjkrol/gokq v1.1.3 h1:Q+/b+SP7yjGLutrFtT++xogM1dfim3zOQREUbJ5HLVI=
+github.com/kjkrol/gokq v1.1.3/go.mod h1:5W7JDN2ji7rhjUfMS1WVBPVKzyqqVBD7ZGrFdH475OA=
 github.com/kjkrol/goku v1.0.0 h1:PHp8wBM9HsmTe8y7NVSWhjypVId1G5rqpDaWeTUMGDk=
 github.com/kjkrol/goku v1.0.0/go.mod h1:r/4WWEXxPcnnVkQ/eUUtWxcno+aanVcophHgNm3/dkM=
