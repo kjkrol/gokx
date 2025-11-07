@@ -32,7 +32,9 @@ func main() {
 
 	layer2 := window.GetDefaultPane().GetLayer(2)
 
-	polygon1Shape := geometry.NewPlaneBox(geometry.NewVec(50, 50), 50, 50)
+	plane := geometry.NewCyclicBoundedPlane(800, 800)
+
+	polygon1Shape := plane.WrapBoundingBox(geometry.NewBoundingBoxAt(geometry.NewVec(50, 50), 50, 50))
 
 	polygon1 := &gfx.Drawable{
 		PlaneBox: polygon1Shape,
@@ -42,7 +44,7 @@ func main() {
 		},
 	}
 
-	rectShape := geometry.NewPlaneBox(geometry.NewVec(150, 150), 100, 100)
+	rectShape := plane.WrapBoundingBox(geometry.NewBoundingBoxAt(geometry.NewVec(150, 150), 100, 100))
 	polygon2 := &gfx.Drawable{
 		PlaneBox: rectShape,
 		Style: gfx.SpatialStyle{
@@ -57,8 +59,7 @@ func main() {
 		randX := r.Intn(800)
 		randY := r.Intn(800)
 		vec := geometry.NewVec(randX, randY)
-		vecBox := geometry.NewBoundingBoxAround(vec, 0)
-		planeBox := geometry.NewPlaneBoxFromBox(vecBox)
+		planeBox := plane.WrapVec(vec)
 		drawable := &gfx.Drawable{
 			PlaneBox: planeBox,
 			Style:    gfx.SpatialStyle{Stroke: color.White},
@@ -74,8 +75,6 @@ func main() {
 	window.Show()
 
 	// ------- Animations -------------------
-
-	plane := geometry.NewCyclicBoundedPlane(800, 800)
 
 	drawables := make([]*gfx.Drawable, 0, len(pointDrawables)+2)
 	drawables = append(drawables, pointDrawables...)
@@ -110,7 +109,7 @@ func main() {
 
 	window.RefreshRate(120)
 
-	ctx := Context{false, window}
+	ctx := Context{false, window, plane}
 	window.ListenEvents(func(event gfx.Event) {
 		handleEvent(event, &ctx)
 	})
@@ -122,6 +121,7 @@ func main() {
 type Context struct {
 	lmbPressed bool
 	window     *gfx.Window
+	plane      geometry.Plane[int]
 }
 
 func handleEvent(event gfx.Event, ctx *Context) {
@@ -173,8 +173,7 @@ func drawDots(wX, wY int, ctx *Context) {
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
 	vec := geometry.NewVec(px, py)
-	vecBox := geometry.NewBoundingBoxAround(vec, 0)
-	planeBox := geometry.NewPlaneBoxFromBox(vecBox)
+	planeBox := ctx.plane.WrapVec(vec)
 	drawable := &gfx.Drawable{
 		PlaneBox: planeBox,
 		Style:    gfx.SpatialStyle{Stroke: color.White},
