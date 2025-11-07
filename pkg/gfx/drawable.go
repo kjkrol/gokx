@@ -5,7 +5,8 @@ import (
 	"image/color"
 	"sort"
 
-	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokg/pkg/geom"
+	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokx/internal/platform"
 )
 
@@ -15,7 +16,7 @@ type SpatialStyle struct {
 }
 
 type Drawable struct {
-	geometry.PlaneBox[int]
+	plane.AABB[int]
 	Style SpatialStyle
 	layer *Layer
 }
@@ -25,16 +26,16 @@ var (
 	transparentFill  = image.NewUniform(transparentColor)
 )
 
-func (d *Drawable) Update(mutator func(shape *geometry.PlaneBox[int])) {
+func (d *Drawable) Update(mutator func(shape *plane.AABB[int])) {
 	if d == nil || mutator == nil {
 		return
 	}
 	if d.layer == nil {
-		mutator(&d.PlaneBox)
+		mutator(&d.AABB)
 		return
 	}
 	d.layer.ModifyDrawable(d, func() {
-		mutator(&d.PlaneBox)
+		mutator(&d.AABB)
 	})
 }
 
@@ -50,26 +51,26 @@ func paintDrawableSurface(surface platform.Surface, drawable *Drawable) {
 	if surface == nil || drawable == nil {
 		return
 	}
-	paintShapeSurface(surface, drawable.Style, drawable.PlaneBox.BoundingBox)
-	fragments := drawable.PlaneBox.Fragments()
-	for _, fragment := range fragments {
-		paintShapeSurface(surface, drawable.Style, fragment)
-	}
+	paintShapeSurface(surface, drawable.Style, drawable.AABB.AABB)
+	drawable.AABB.VisitFragments(func(pos plane.FragPosition, aabb geom.AABB[int]) bool {
+		paintShapeSurface(surface, drawable.Style, aabb)
+		return true
+	})
 }
 
-func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geometry.BoundingBox[int]) {
-	boxPoints := make([]geometry.Vec[int], 4)
+func paintShapeSurface(surface platform.Surface, style SpatialStyle, shape geom.AABB[int]) {
+	boxPoints := make([]geom.Vec[int], 4)
 	boxPoints[0] = shape.BottomRight
-	boxPoints[1] = geometry.NewVec(shape.BottomRight.X, shape.TopLeft.Y)
+	boxPoints[1] = geom.NewVec(shape.BottomRight.X, shape.TopLeft.Y)
 	boxPoints[2] = shape.TopLeft
-	boxPoints[3] = geometry.NewVec(shape.TopLeft.X, shape.BottomRight.Y)
+	boxPoints[3] = geom.NewVec(shape.TopLeft.X, shape.BottomRight.Y)
 
 	points := rasterizePolygon(boxPoints)
 	paintPolygonSurface(surface, points, style)
 
 }
 
-func rasterizeVec(v geometry.Vec[int]) image.Point {
+func rasterizeVec(v geom.Vec[int]) image.Point {
 	return vecToImagePoint(v)
 }
 
@@ -91,7 +92,7 @@ func paintLineSurface(surface platform.Surface, points []image.Point, style Spat
 	paintLinePixelsSurface(surface, points, style.Stroke)
 }
 
-func rasterizePolygon(vertices []geometry.Vec[int]) []image.Point {
+func rasterizePolygon(vertices []geom.Vec[int]) []image.Point {
 	if len(vertices) == 0 {
 		return nil
 	}
@@ -209,11 +210,11 @@ func bresenhamLine(start, end image.Point) []image.Point {
 	return points
 }
 
-func vecToImagePoint(v geometry.Vec[int]) image.Point {
+func vecToImagePoint(v geom.Vec[int]) image.Point {
 	return image.Pt(v.X, v.Y)
 }
 
-func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
+func vecsToImagePoints(vecs []geom.Vec[int]) []image.Point {
 	points := make([]image.Point, len(vecs))
 	for i, v := range vecs {
 		points[i] = vecToImagePoint(v)
@@ -221,7 +222,7 @@ func vecsToImagePoints(vecs []geometry.Vec[int]) []image.Point {
 	return points
 }
 
-func boxToImageRect(box geometry.BoundingBox[int]) image.Rectangle {
+func boxToImageRect(box geom.AABB[int]) image.Rectangle {
 	minX := box.TopLeft.X
 	minY := box.TopLeft.Y
 	maxX := box.BottomRight.X
@@ -235,23 +236,21 @@ func boxToImageRect(box geometry.BoundingBox[int]) image.Rectangle {
 	return image.Rect(minX, minY, maxX+1, maxY+1)
 }
 
-func shapeToImageRectangle(planeBox geometry.PlaneBox[int]) []image.Rectangle {
+func shapeToImageRectangle(planeBox plane.AABB[int]) []image.Rectangle {
 	rects := make([]image.Rectangle, 0, 1)
-	mainRect := boxToImageRect(planeBox.BoundingBox)
+	mainRect := boxToImageRect(planeBox.AABB)
 	if !mainRect.Empty() {
 		rects = append(rects, mainRect)
 	}
-	fragments := planeBox.Fragments()
-	if len(fragments) == 0 {
-		return rects
-	}
-	for _, fragment := range fragments {
-		rect := boxToImageRect(fragment)
-		if rect.Empty() {
-			continue
+
+	planeBox.VisitFragments(func(pos plane.FragPosition, aabb geom.AABB[int]) bool {
+		rect := boxToImageRect(aabb)
+		if !rect.Empty() {
+			rects = append(rects, rect)
 		}
-		rects = append(rects, rect)
-	}
+		return true
+	})
+
 	return rects
 }
 

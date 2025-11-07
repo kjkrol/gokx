@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"image/color"
 
-	"github.com/kjkrol/gokg/pkg/geometry"
-	"github.com/kjkrol/gokq/pkg/quadtree"
+	"github.com/kjkrol/gokg/pkg/geom"
+	"github.com/kjkrol/gokg/pkg/plane"
+	"github.com/kjkrol/gokq/pkg/qtree"
 	"github.com/kjkrol/gokx/pkg/gfx"
 )
 
@@ -31,8 +32,8 @@ func main() {
 
 	layerTree := window.GetDefaultPane().GetLayer(2)
 
-	plane := geometry.NewCyclicBoundedPlane(800, 800)
-	qtree := quadtree.NewQuadTree[int, int](plane)
+	plane := plane.NewToroidal2D(800, 800)
+	qtree := qtree.NewQuadTree(plane)
 	defer qtree.Close()
 
 	ctx := Context{
@@ -60,24 +61,28 @@ func main() {
 type Context struct {
 	lmbPressed     bool
 	window         *gfx.Window
-	plane          geometry.Plane[int]
-	quadTree       *quadtree.QuadTree[int, int]
+	plane          plane.Space2D[int]
+	quadTree       *qtree.QuadTree[int]
 	quadTreeLayer  *gfx.Layer
 	quadTreeFrames []*gfx.Drawable
 	counter        int
 }
 
 type quadTreeItem struct {
-	shape geometry.BoundingBox[int]
+	shape geom.AABB[int]
 	id    int
 }
 
-func (qt *quadTreeItem) Bound() geometry.BoundingBox[int] {
+func (qt *quadTreeItem) Bound() geom.AABB[int] {
 	return qt.shape
 }
 
-func (qt quadTreeItem) Id() int {
-	return qt.id
+func (qt quadTreeItem) SameID(other qtree.Item[int]) bool {
+	o, ok := other.(*quadTreeItem)
+	if !ok {
+		return false
+	}
+	return qt.id == o.id
 }
 
 func handleEvent(event gfx.Event, ctx *Context) {
@@ -128,17 +133,16 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := geometry.Vec[int]{X: px, Y: py}
-	vecBox := geometry.NewBoundingBoxAround(vec, 0)
-	planeBox := geometry.NewPlaneBoxFromBox(vecBox)
+	vec := geom.Vec[int]{X: px, Y: py}
+	planeBox := ctx.plane.WrapVec(vec)
 	drawable := &gfx.Drawable{
-		PlaneBox: planeBox,
-		Style:    gfx.SpatialStyle{Stroke: color.White},
+		AABB:  planeBox,
+		Style: gfx.SpatialStyle{Stroke: color.White},
 	}
 	layer1.AddDrawable(drawable)
 	id := ctx.counter + 1
 	ctx.counter = id
-	item := &quadTreeItem{shape: planeBox.BoundingBox, id: id}
+	item := &quadTreeItem{shape: planeBox.AABB, id: id}
 	if ctx.quadTree != nil {
 		ctx.quadTree.Add(item)
 	}
@@ -160,7 +164,7 @@ func renderQuadTree(ctx *Context) {
 		rect := leafs[i]
 		rectCopy := rect
 		drawable := &gfx.Drawable{
-			PlaneBox: geometry.NewPlaneBoxFromBox(rectCopy),
+			AABB: ctx.plane.WrapAABB(rectCopy),
 			Style: gfx.SpatialStyle{
 				Stroke: outline,
 			},

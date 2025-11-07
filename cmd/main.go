@@ -6,7 +6,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokg/pkg/geom"
+	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokx/pkg/gfx"
 )
 
@@ -32,19 +33,21 @@ func main() {
 
 	layer2 := window.GetDefaultPane().GetLayer(2)
 
-	polygon1Shape := geometry.NewPlaneBox(geometry.NewVec(50, 50), 50, 50)
+	torus := plane.NewToroidal2D(800, 800)
+
+	polygon1Shape := torus.WrapAABB(geom.NewAABBAt(geom.NewVec(50, 50), 50, 50))
 
 	polygon1 := &gfx.Drawable{
-		PlaneBox: polygon1Shape,
+		AABB: polygon1Shape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
 		},
 	}
 
-	rectShape := geometry.NewPlaneBox(geometry.NewVec(150, 150), 100, 100)
+	rectShape := torus.WrapAABB(geom.NewAABBAt(geom.NewVec(150, 150), 100, 100))
 	polygon2 := &gfx.Drawable{
-		PlaneBox: rectShape,
+		AABB: rectShape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
 			Stroke: color.RGBA{0, 0, 255, 255},
@@ -56,12 +59,11 @@ func main() {
 	for range 1000 {
 		randX := r.Intn(800)
 		randY := r.Intn(800)
-		vec := geometry.NewVec(randX, randY)
-		vecBox := geometry.NewBoundingBoxAround(vec, 0)
-		planeBox := geometry.NewPlaneBoxFromBox(vecBox)
+		vec := geom.NewVec(randX, randY)
+		planeBox := torus.WrapVec(vec)
 		drawable := &gfx.Drawable{
-			PlaneBox: planeBox,
-			Style:    gfx.SpatialStyle{Stroke: color.White},
+			AABB:  planeBox,
+			Style: gfx.SpatialStyle{Stroke: color.White},
 		}
 		pointDrawables = append(pointDrawables, drawable)
 		layer2.AddDrawable(drawable)
@@ -75,8 +77,6 @@ func main() {
 
 	// ------- Animations -------------------
 
-	plane := geometry.NewCyclicBoundedPlane(800, 800)
-
 	drawables := make([]*gfx.Drawable, 0, len(pointDrawables)+2)
 	drawables = append(drawables, pointDrawables...)
 	drawables = append(drawables, polygon1, polygon2)
@@ -86,18 +86,18 @@ func main() {
 		50*time.Millisecond,
 		drawables,
 		func() {
-			polygon1.Update(func(shape *geometry.PlaneBox[int]) {
-				plane.Translate(shape, geometry.Vec[int]{X: 1, Y: 1})
+			polygon1.Update(func(shape *plane.AABB[int]) {
+				torus.Translate(shape, geom.Vec[int]{X: 1, Y: 1})
 			})
-			polygon2.Update(func(shape *geometry.PlaneBox[int]) {
-				plane.Translate(shape, geometry.Vec[int]{X: 0, Y: -1})
+			polygon2.Update(func(shape *plane.AABB[int]) {
+				torus.Translate(shape, geom.Vec[int]{X: 0, Y: -1})
 			})
 
 			for _, drawable := range pointDrawables {
 				dx := r.Intn(5) - 2
 				dy := r.Intn(5) - 2
-				drawable.Update(func(shape *geometry.PlaneBox[int]) {
-					plane.Translate(shape, geometry.Vec[int]{X: dx, Y: dy})
+				drawable.Update(func(shape *plane.AABB[int]) {
+					torus.Translate(shape, geom.Vec[int]{X: dx, Y: dy})
 
 				})
 			}
@@ -110,7 +110,7 @@ func main() {
 
 	window.RefreshRate(120)
 
-	ctx := Context{false, window}
+	ctx := Context{false, window, torus}
 	window.ListenEvents(func(event gfx.Event) {
 		handleEvent(event, &ctx)
 	})
@@ -122,6 +122,7 @@ func main() {
 type Context struct {
 	lmbPressed bool
 	window     *gfx.Window
+	plane      plane.Space2D[int]
 }
 
 func handleEvent(event gfx.Event, ctx *Context) {
@@ -172,12 +173,11 @@ func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
 	px, py := pane.WindowToPaneCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := geometry.NewVec(px, py)
-	vecBox := geometry.NewBoundingBoxAround(vec, 0)
-	planeBox := geometry.NewPlaneBoxFromBox(vecBox)
+	vec := geom.NewVec(px, py)
+	planeBox := ctx.plane.WrapVec(vec)
 	drawable := &gfx.Drawable{
-		PlaneBox: planeBox,
-		Style:    gfx.SpatialStyle{Stroke: color.White},
+		AABB:  planeBox,
+		Style: gfx.SpatialStyle{Stroke: color.White},
 	}
 	layer1.AddDrawable(drawable)
 }

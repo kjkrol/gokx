@@ -6,7 +6,7 @@ import (
 	"image/draw"
 	"sync"
 
-	"github.com/kjkrol/gokg/pkg/geometry"
+	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokx/internal/platform"
 )
 
@@ -75,7 +75,7 @@ func (l *Layer) AddDrawable(drawable *Drawable) {
 	l.mu.Lock()
 	for _, existing := range l.drawables {
 		if existing == drawable {
-			l.queueSpatialDirtyLocked(drawable.PlaneBox)
+			l.queueSpatialDirtyLocked(drawable.AABB)
 			l.flushLocked()
 			return
 		}
@@ -83,7 +83,7 @@ func (l *Layer) AddDrawable(drawable *Drawable) {
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
 	paintDrawableSurface(l.surface, drawable)
-	l.queueSpatialDirtyLocked(drawable.PlaneBox)
+	l.queueSpatialDirtyLocked(drawable.AABB)
 	l.flushLocked()
 }
 
@@ -110,7 +110,7 @@ func (l *Layer) RemoveDrawable(drawable *Drawable) {
 	}
 	drawable.detach()
 	l.needsFullRender = true
-	l.queueSpatialDirtyLocked(drawable.PlaneBox)
+	l.queueSpatialDirtyLocked(drawable.AABB)
 	l.flushLocked()
 }
 
@@ -137,12 +137,12 @@ func (l *Layer) ModifyDrawable(drawable *Drawable, mutate func()) {
 		mutate()
 		return
 	}
-	oldRects := shapeToImageRectangle(drawable.PlaneBox)
+	oldRects := shapeToImageRectangle(drawable.AABB)
 	l.mu.Unlock()
 
 	mutate()
 
-	newRects := shapeToImageRectangle(drawable.PlaneBox)
+	newRects := shapeToImageRectangle(drawable.AABB)
 
 	l.mu.Lock()
 	if drawable.layer != l {
@@ -186,7 +186,7 @@ func (l *Layer) render(rect image.Rectangle) {
 		if drawable == nil {
 			continue
 		}
-		rects := shapeToImageRectangle(drawable.PlaneBox)
+		rects := shapeToImageRectangle(drawable.AABB)
 		intersects := false
 		for _, r := range rects {
 			if !r.Intersect(area).Empty() {
@@ -214,7 +214,7 @@ func (l *Layer) queueRectsLocked(rects ...image.Rectangle) {
 	l.queueDirtyRectsLocked(rects...)
 }
 
-func (l *Layer) queueSpatialDirtyLocked(shape geometry.PlaneBox[int]) {
+func (l *Layer) queueSpatialDirtyLocked(shape plane.AABB[int]) {
 	rects := shapeToImageRectangle(shape)
 	l.queueDirtyRectsLocked(rects...)
 }
