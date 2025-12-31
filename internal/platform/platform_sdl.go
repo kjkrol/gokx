@@ -37,11 +37,14 @@ import (
 type sdlWindowWrapper struct {
 	window          *C.SDL_Window
 	renderer        *C.SDL_Renderer
+	textures        []*sdlTextureImageWrapper
+	texturesMu      sync.Mutex
 	title           string
 	width           int
 	height          int
 	surfaceFactory  SurfaceFactory
 	frameHasUpdates bool
+	forcePresent    bool
 }
 
 func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
@@ -59,11 +62,14 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 		panic(fmt.Sprintf("SDL_CreateWindow error: %s", C.GoString(C.SDL_GetError())))
 	}
 
-	renderer := createRendererWithProbe(window)
-	if renderer == nil {
-		C.SDL_DestroyWindow(window)
-		C.SDL_Quit()
-		panic(fmt.Sprintf("SDL_CreateRenderer error: %s", C.GoString(C.SDL_GetError())))
+	var renderer *C.SDL_Renderer
+	if useSDLTexturePath() {
+		renderer = createRendererWithProbe(window)
+		if renderer == nil {
+			C.SDL_DestroyWindow(window)
+			C.SDL_Quit()
+			panic(fmt.Sprintf("SDL_CreateRenderer error: %s", C.GoString(C.SDL_GetError())))
+		}
 	}
 
 	return &sdlWindowWrapper{
@@ -152,14 +158,18 @@ func (w *sdlWindowWrapper) Show() {
 	C.SDL_ShowWindow(w.window)
 	C.SDL_EventState(C.SDL_QUIT, C.SDL_ENABLE)
 
-	// Pierwsza ramka – żeby kompozytor dostał realną zawartość.
-	C.SDL_SetRenderDrawColor(w.renderer, C.Uint8(0), C.Uint8(0), C.Uint8(0), C.Uint8(255))
-	C.SDL_RenderClear(w.renderer)
-	C.SDL_RenderPresent(w.renderer)
+	if w.renderer != nil && useSDLTexturePath() {
+		// Pierwsza ramka – żeby kompozytor dostał realną zawartość.
+		C.SDL_SetRenderDrawColor(w.renderer, C.Uint8(0), C.Uint8(0), C.Uint8(0), C.Uint8(255))
+		C.SDL_RenderClear(w.renderer)
+		C.SDL_RenderPresent(w.renderer)
+	}
 }
 
 func (w *sdlWindowWrapper) Close() {
-	C.SDL_DestroyRenderer(w.renderer)
+	if w.renderer != nil {
+		C.SDL_DestroyRenderer(w.renderer)
+	}
 	C.SDL_DestroyWindow(w.window)
 	C.SDL_Quit()
 	runtime.UnlockOSThread()
@@ -168,6 +178,12 @@ func (w *sdlWindowWrapper) Close() {
 func (w *sdlWindowWrapper) NextEventTimeout(timeoutMs int) Event {
 	var e C.SDL_Event
 	if C.SDL_WaitEventTimeout(&e, C.int(timeoutMs)) != 0 {
+		if (*(*C.Uint32)(unsafe.Pointer(&e))) == C.SDL_WINDOWEVENT {
+			windowEvent := (*C.SDL_WindowEvent)(unsafe.Pointer(&e))
+			if windowEvent.event == C.SDL_WINDOWEVENT_EXPOSED {
+				w.forcePresent = true
+			}
+		}
 		return convert(e)
 	}
 	return TimeoutEvent{} // brak eventu, upłynął timeout
@@ -261,17 +277,36 @@ func (w *sdlWindowWrapper) BeginFrame() {
 		return
 	}
 	w.frameHasUpdates = false
-	C.SDL_SetRenderDrawColor(w.renderer, 0, 0, 0, 255)
-	C.SDL_RenderClear(w.renderer)
 }
 
 func (w *sdlWindowWrapper) EndFrame() {
 	if !useSDLTexturePath() || w.renderer == nil {
 		return
 	}
-	if w.frameHasUpdates {
-		C.SDL_RenderPresent(w.renderer)
+	if !w.frameHasUpdates && !w.forcePresent {
+		return
 	}
+
+	C.SDL_SetRenderDrawColor(w.renderer, 0, 0, 0, 255)
+	C.SDL_RenderClear(w.renderer)
+
+	for _, tex := range w.textureSnapshot() {
+		if tex == nil || tex.texture == nil || tex.img == nil {
+			continue
+		}
+		dstRect := C.SDL_Rect{
+			x: C.int(tex.offsetX),
+			y: C.int(tex.offsetY),
+			w: C.int(tex.img.Rect.Dx()),
+			h: C.int(tex.img.Rect.Dy()),
+		}
+		if C.SDL_RenderCopy(w.renderer, tex.texture, nil, &dstRect) != 0 {
+			fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
+		}
+	}
+
+	C.SDL_RenderPresent(w.renderer)
+	w.forcePresent = false
 }
 
 type sdlSurfaceFactory struct {
@@ -386,13 +421,19 @@ func newSDLTextureImageWrapper(win *sdlWindowWrapper, img *image.RGBA, offsetX, 
 		return nil
 	}
 
-	return &sdlTextureImageWrapper{
+	if C.SDL_SetTextureBlendMode(texture, C.SDL_BLENDMODE_BLEND) != 0 {
+		fmt.Println("SDL_SetTextureBlendMode error:", C.GoString(C.SDL_GetError()))
+	}
+
+	wrapper := &sdlTextureImageWrapper{
 		window:  win,
 		texture: texture,
 		img:     img,
 		offsetX: offsetX,
 		offsetY: offsetY,
 	}
+	win.registerTexture(wrapper)
+	return wrapper
 }
 
 func (i *sdlTextureImageWrapper) Update(rect image.Rectangle) {
@@ -400,31 +441,45 @@ func (i *sdlTextureImageWrapper) Update(rect image.Rectangle) {
 		return
 	}
 
-	pixels := unsafe.Pointer(&i.img.Pix[0])
-	if C.SDL_UpdateTexture(i.texture, nil, pixels, C.int(i.img.Stride)) != 0 {
+	if rect.Empty() {
+		return
+	}
+	rect = rect.Intersect(i.img.Rect)
+	if rect.Empty() {
+		return
+	}
+
+	relX := rect.Min.X - i.img.Rect.Min.X
+	relY := rect.Min.Y - i.img.Rect.Min.Y
+	offset := relY*i.img.Stride + relX*4
+	if offset < 0 || offset >= len(i.img.Pix) {
+		return
+	}
+
+	pixels := unsafe.Pointer(&i.img.Pix[offset])
+	sdlRect := C.SDL_Rect{
+		x: C.int(relX),
+		y: C.int(relY),
+		w: C.int(rect.Dx()),
+		h: C.int(rect.Dy()),
+	}
+	if C.SDL_UpdateTexture(i.texture, &sdlRect, pixels, C.int(i.img.Stride)) != 0 {
 		fmt.Println("SDL_UpdateTexture error:", C.GoString(C.SDL_GetError()))
 		return
 	}
 
-	dstRect := C.SDL_Rect{
-		x: C.int(i.offsetX),
-		y: C.int(i.offsetY),
-		w: C.int(i.img.Rect.Dx()),
-		h: C.int(i.img.Rect.Dy()),
+	if i.window != nil {
+		i.window.frameHasUpdates = true
 	}
-
-	if C.SDL_RenderCopy(i.window.renderer, i.texture, nil, &dstRect) != 0 {
-		fmt.Println("SDL_RenderCopy error:", C.GoString(C.SDL_GetError()))
-		return
-	}
-
-	i.window.frameHasUpdates = true
 
 	runtime.KeepAlive(i.window)
 	runtime.KeepAlive(i.img)
 }
 
 func (i *sdlTextureImageWrapper) Delete() {
+	if i != nil && i.window != nil {
+		i.window.unregisterTexture(i)
+	}
 	if i != nil && i.texture != nil {
 		C.my_SDL_DestroyTexture(i.texture)
 		i.texture = nil
@@ -510,3 +565,44 @@ func copyRectRGBAtoSurface(surface *C.SDL_Surface, src *image.RGBA, rect image.R
 
 type QuitEvent struct{}
 type UnknownEvent struct{}
+
+func (w *sdlWindowWrapper) registerTexture(tex *sdlTextureImageWrapper) {
+	if w == nil || tex == nil {
+		return
+	}
+	w.texturesMu.Lock()
+	w.textures = append(w.textures, tex)
+	w.texturesMu.Unlock()
+}
+
+func (w *sdlWindowWrapper) unregisterTexture(tex *sdlTextureImageWrapper) {
+	if w == nil || tex == nil {
+		return
+	}
+	w.texturesMu.Lock()
+	for idx, current := range w.textures {
+		if current == tex {
+			copy(w.textures[idx:], w.textures[idx+1:])
+			w.textures[len(w.textures)-1] = nil
+			w.textures = w.textures[:len(w.textures)-1]
+			break
+		}
+	}
+	w.texturesMu.Unlock()
+	w.forcePresent = true
+}
+
+func (w *sdlWindowWrapper) textureSnapshot() []*sdlTextureImageWrapper {
+	if w == nil {
+		return nil
+	}
+	w.texturesMu.Lock()
+	if len(w.textures) == 0 {
+		w.texturesMu.Unlock()
+		return nil
+	}
+	out := make([]*sdlTextureImageWrapper, len(w.textures))
+	copy(out, w.textures)
+	w.texturesMu.Unlock()
+	return out
+}
