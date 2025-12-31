@@ -1,52 +1,34 @@
 package gfx
 
 import (
-	"image"
 	"image/color"
-	"image/draw"
 	"sync"
-
-	"github.com/kjkrol/gokg/pkg/plane"
-	"github.com/kjkrol/gokx/internal/platform"
 )
 
-const defaultDirtyRectCapacity = 64
-
 type Layer struct {
-	surface         platform.Surface
-	Img             *image.RGBA
-	pane            *Pane
-	mu              sync.Mutex
-	idx             int
-	dirtyRectCap    int
-	dirtyRects      []image.Rectangle
-	flushRects      []image.Rectangle
-	batchedRects    []image.Rectangle
-	batchDepth      int
-	drawables       []*Drawable
-	background      color.Color
-	needsFullRender bool
+	pane          *Pane
+	mu            sync.Mutex
+	idx           int
+	drawables     []*Drawable
+	background    color.Color
+	instanceData  []float32
+	instanceCount int
+	dirty         bool
+	batchDepth    int
+	batchedDirty  bool
 }
 
-func NewLayer(width, height int, pane *Pane, dirtyCap int) *Layer {
-	if dirtyCap <= 0 {
-		dirtyCap = defaultDirtyRectCapacity
-	}
+func NewLayer(pane *Pane) *Layer {
 	layer := &Layer{
-		surface:         platform.NewRGBASurface(width, height),
-		pane:            pane,
-		dirtyRectCap:    dirtyCap,
-		needsFullRender: false,
+		pane:      pane,
+		drawables: make([]*Drawable, 0),
+		dirty:     true,
 	}
-	layer.dirtyRects = make([]image.Rectangle, 0, dirtyCap)
-	layer.flushRects = make([]image.Rectangle, dirtyCap)
-	layer.drawables = make([]*Drawable, 0)
-	layer.Img = layer.surface.RGBA()
 	return layer
 }
 
-func NewLayerDefault(width, height int, pane *Pane) *Layer {
-	return NewLayer(width, height, pane, defaultDirtyRectCapacity)
+func NewLayerDefault(pane *Pane) *Layer {
+	return NewLayer(pane)
 }
 
 func (l *Layer) GetPane() *Pane {
@@ -56,12 +38,8 @@ func (l *Layer) GetPane() *Pane {
 func (l *Layer) SetBackground(color color.Color) {
 	l.mu.Lock()
 	l.background = color
-	dst := l.surface.RGBA()
-	draw.Draw(dst, dst.Bounds(), &image.Uniform{color}, image.Point{}, draw.Src)
-	l.Img = dst
-	l.needsFullRender = true
-	l.queueDirtyRectsLocked(dst.Bounds())
-	l.flushLocked()
+	l.markDirtyLocked()
+	l.mu.Unlock()
 }
 
 func (l *Layer) AddDrawable(drawable *Drawable) {
@@ -75,16 +53,15 @@ func (l *Layer) AddDrawable(drawable *Drawable) {
 	l.mu.Lock()
 	for _, existing := range l.drawables {
 		if existing == drawable {
-			l.queueSpatialDirtyLocked(drawable.AABB)
-			l.flushLocked()
+			l.markDirtyLocked()
+			l.mu.Unlock()
 			return
 		}
 	}
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
-	paintDrawableSurface(l.surface, drawable)
-	l.queueSpatialDirtyLocked(drawable.AABB)
-	l.flushLocked()
+	l.markDirtyLocked()
+	l.mu.Unlock()
 }
 
 func (l *Layer) RemoveDrawable(drawable *Drawable) {
@@ -109,9 +86,8 @@ func (l *Layer) RemoveDrawable(drawable *Drawable) {
 		l.drawables = append(l.drawables[:idx], l.drawables[idx+1:]...)
 	}
 	drawable.detach()
-	l.needsFullRender = true
-	l.queueSpatialDirtyLocked(drawable.AABB)
-	l.flushLocked()
+	l.markDirtyLocked()
+	l.mu.Unlock()
 }
 
 func (l *Layer) Drawables() []*Drawable {
@@ -137,125 +113,17 @@ func (l *Layer) ModifyDrawable(drawable *Drawable, mutate func()) {
 		mutate()
 		return
 	}
-	oldRects := shapeToImageRectangle(drawable.AABB)
 	l.mu.Unlock()
 
 	mutate()
-
-	newRects := shapeToImageRectangle(drawable.AABB)
 
 	l.mu.Lock()
 	if drawable.layer != l {
 		l.mu.Unlock()
 		return
 	}
-	l.needsFullRender = true
-	l.queueRectsLocked(oldRects...)
-	l.queueRectsLocked(newRects...)
-	l.flushLocked()
-}
-
-func (l *Layer) render(rect image.Rectangle) {
-	l.mu.Lock()
-	if !l.needsFullRender {
-		l.mu.Unlock()
-		return
-	}
-	defer func() {
-		l.needsFullRender = false
-		l.mu.Unlock()
-	}()
-
-	if l.surface == nil {
-		return
-	}
-	dst := l.surface.RGBA()
-	area := rect.Intersect(dst.Bounds())
-	if area.Empty() {
-		return
-	}
-
-	src := image.Image(transparentFill)
-	if l.background != nil {
-		src = image.NewUniform(l.background)
-	}
-	draw.Draw(dst, area, src, image.Point{}, draw.Src)
-	l.Img = dst
-
-	for _, drawable := range l.drawables {
-		if drawable == nil {
-			continue
-		}
-		rects := shapeToImageRectangle(drawable.AABB)
-		intersects := false
-		for _, r := range rects {
-			if !r.Intersect(area).Empty() {
-				intersects = true
-				break
-			}
-		}
-		if !intersects {
-			continue
-		}
-		paintDrawableSurface(l.surface, drawable)
-	}
-}
-
-func (l *Layer) queueDirtyRectsLocked(rects ...image.Rectangle) {
-	for _, rect := range rects {
-		if rect.Empty() {
-			continue
-		}
-		l.dirtyRects = append(l.dirtyRects, rect)
-	}
-}
-
-func (l *Layer) queueRectsLocked(rects ...image.Rectangle) {
-	l.queueDirtyRectsLocked(rects...)
-}
-
-func (l *Layer) queueSpatialDirtyLocked(shape plane.AABB[int]) {
-	rects := shapeToImageRectangle(shape)
-	l.queueDirtyRectsLocked(rects...)
-}
-
-func (l *Layer) drainDirtyLocked() []image.Rectangle {
-	if len(l.dirtyRects) == 0 {
-		return nil
-	}
-	n := len(l.dirtyRects)
-	if cap(l.flushRects) < n {
-		newCap := n
-		if newCap < l.dirtyRectCap {
-			newCap = l.dirtyRectCap
-		}
-		l.flushRects = make([]image.Rectangle, newCap)
-	}
-	copy(l.flushRects[:n], l.dirtyRects)
-	l.dirtyRects = l.dirtyRects[:0]
-	return l.flushRects[:n:n]
-}
-
-func (l *Layer) flushDirtyRects(rects []image.Rectangle) {
-	if len(rects) == 0 || l == nil || l.pane == nil {
-		return
-	}
-	l.pane.markLayerDirty(l.idx)
-	for i := range rects {
-		rect := rects[i]
-		l.pane.MarkToRefresh(&rect)
-	}
-}
-
-func (l *Layer) flushLocked() {
-	rects := l.drainDirtyLocked()
-	if l.batchDepth > 0 {
-		l.batchedRects = append(l.batchedRects, rects...)
-		l.mu.Unlock()
-		return
-	}
+	l.markDirtyLocked()
 	l.mu.Unlock()
-	l.flushDirtyRects(rects)
 }
 
 func (l *Layer) beginBatch() {
@@ -265,19 +133,15 @@ func (l *Layer) beginBatch() {
 }
 
 func (l *Layer) endBatch() {
-	var rects []image.Rectangle
 	l.mu.Lock()
 	if l.batchDepth > 0 {
 		l.batchDepth--
-		if l.batchDepth == 0 && len(l.batchedRects) > 0 {
-			rects = append(rects, l.batchedRects...)
-			l.batchedRects = l.batchedRects[:0]
+		if l.batchDepth == 0 && l.batchedDirty {
+			l.dirty = true
+			l.batchedDirty = false
 		}
 	}
 	l.mu.Unlock()
-	if len(rects) > 0 {
-		l.flushDirtyRects(rects)
-	}
 }
 
 func (l *Layer) Batch(fn func()) {
@@ -286,26 +150,33 @@ func (l *Layer) Batch(fn func()) {
 	fn()
 }
 
-func (l *Layer) SetDirtyRectCapacity(capacity int) {
-	if capacity <= 0 {
-		capacity = defaultDirtyRectCapacity
+func (l *Layer) markDirtyLocked() {
+	if l.batchDepth > 0 {
+		l.batchedDirty = true
+		return
 	}
+	l.dirty = true
+}
+
+func (l *Layer) consumeInstances(force bool) (data []float32, count int, bg color.Color, dirty bool) {
 	l.mu.Lock()
-	l.dirtyRectCap = capacity
-	if cap(l.dirtyRects) < capacity {
-		newSlice := make([]image.Rectangle, len(l.dirtyRects), capacity)
-		copy(newSlice, l.dirtyRects)
-		l.dirtyRects = newSlice
+	if !l.dirty && !force {
+		bg = l.background
+		l.mu.Unlock()
+		return nil, 0, bg, false
 	}
-	if cap(l.flushRects) < capacity {
-		l.flushRects = make([]image.Rectangle, capacity)
-	} else if len(l.flushRects) > capacity {
-		l.flushRects = l.flushRects[:capacity]
+	l.instanceData = l.instanceData[:0]
+	for _, drawable := range l.drawables {
+		if drawable == nil {
+			continue
+		}
+		l.instanceData = appendInstanceData(l.instanceData, drawable.AABB, drawable.Style)
 	}
-	if cap(l.batchedRects) < capacity {
-		newBatch := make([]image.Rectangle, len(l.batchedRects), capacity)
-		copy(newBatch, l.batchedRects)
-		l.batchedRects = newBatch
-	}
+	data = append([]float32(nil), l.instanceData...)
+	count = len(data) / floatsPerInstance
+	l.instanceCount = count
+	l.dirty = false
+	bg = l.background
 	l.mu.Unlock()
+	return data, count, bg, true
 }

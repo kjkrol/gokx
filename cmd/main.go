@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"image/color"
 	"math/rand"
@@ -10,6 +11,9 @@ import (
 	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokx/pkg/gfx"
 )
+
+//go:embed shader.glsl
+var shaderSource string
 
 func main() {
 
@@ -22,7 +26,7 @@ func main() {
 		Title:       "Sample Window",
 	}
 
-	window := gfx.NewWindow(config)
+	window := gfx.NewWindow(config, gfx.RendererConfig{ShaderSource: shaderSource})
 	defer window.Close()
 
 	layer0 := window.GetDefaultPane().GetLayer(0)

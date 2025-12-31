@@ -294,6 +294,9 @@ func (w *x11WindowWrapper) SurfaceFactory() SurfaceFactory {
 
 func (w *x11WindowWrapper) BeginFrame() {}
 func (w *x11WindowWrapper) EndFrame()   {}
+func (w *x11WindowWrapper) GLContext() any {
+	return nil
+}
 
 func (w *x11WindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
 	return newx11ImageWrapper(w, img, offsetX, offsetY)

@@ -25,11 +25,14 @@ func (w WindowConfig) convert() platform.WindowConfig {
 
 type Window struct {
 	platformWinWrapper platform.PlatformWindowWrapper
-	surfaceFactory     platform.SurfaceFactory
+	rendererConfig     RendererConfig
+	renderer           *renderer
 	defaultPane        *Pane
 	panes              map[string]*Pane
 	rerfreshing        bool
 	refreshDelay       time.Duration
+	width              int
+	height             int
 	wg                 sync.WaitGroup
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -39,16 +42,21 @@ type Window struct {
 
 const maxEventWait = 50 * time.Millisecond
 
-func NewWindow(conf WindowConfig) *Window {
+func NewWindow(conf WindowConfig, renderer RendererConfig) *Window {
+	if renderer.ShaderSource == "" {
+		panic("renderer shader source is required")
+	}
 	platformConfig := conf.convert()
 	window := Window{
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
 		updates:            make(chan func(), 1024),
+		rendererConfig:     renderer,
+		width:              conf.Width,
+		height:             conf.Height,
 	}
-	window.surfaceFactory = window.platformWinWrapper.SurfaceFactory()
-	if window.surfaceFactory == nil {
-		window.surfaceFactory = platform.DefaultSurfaceFactory()
+	if window.platformWinWrapper == nil {
+		panic("platform window wrapper is required")
 	}
 	window.defaultPane = newPane(
 		&PaneConfig{
@@ -57,15 +65,15 @@ func NewWindow(conf WindowConfig) *Window {
 			OffsetX: 0,
 			OffsetY: 0,
 		},
-		window.surfaceFactory,
-		window.platformWinWrapper.NewPlatformImageWrapper)
+	)
+	window.renderer = newRenderer(window.platformWinWrapper, renderer)
 	window.ctx, window.cancel = context.WithCancel(context.Background())
 	window.rerfreshing = false
 	return &window
 }
 
 func (w *Window) AddPane(name string, conf *PaneConfig) *Pane {
-	pane := newPane(conf, w.surfaceFactory, w.platformWinWrapper.NewPlatformImageWrapper)
+	pane := newPane(conf)
 	w.panes[name] = pane
 	return pane
 }
@@ -80,7 +88,6 @@ func (w *Window) GetPaneByName(name string) *Pane {
 
 func (w *Window) Show() {
 	w.platformWinWrapper.Show()
-	w.defaultPane.Refresh()
 }
 
 func (w *Window) RefreshRate(fps int) {
@@ -97,6 +104,10 @@ func (w *Window) Stop() {
 }
 
 func (w *Window) Close() {
+	if w.renderer != nil {
+		w.renderer.Close()
+		w.renderer = nil
+	}
 	w.defaultPane.Close()
 	w.defaultPane = nil
 	for _, pane := range w.panes {
@@ -163,9 +174,8 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 			doneUpdates:
 
 				w.platformWinWrapper.BeginFrame()
-				w.GetDefaultPane().Refresh()
-				for _, pane := range w.panes {
-					pane.Refresh()
+				if w.renderer != nil {
+					w.renderer.Render(w)
 				}
 				nextRender = now.Add(delay)
 				w.platformWinWrapper.EndFrame()
@@ -176,4 +186,18 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 
 func (w *Window) StartAnimation(animation *Animation) {
 	animation.Run(w.ctx, 0, &w.wg, w.updates)
+}
+
+func (w *Window) panesSnapshot() []*Pane {
+	if w == nil {
+		return nil
+	}
+	out := make([]*Pane, 0, len(w.panes)+1)
+	if w.defaultPane != nil {
+		out = append(out, w.defaultPane)
+	}
+	for _, pane := range w.panes {
+		out = append(out, pane)
+	}
+	return out
 }

@@ -7,9 +7,9 @@
 It includes:
 
 - a **platform layer** (`internal/platform`) with support for multiple backends:
-  - SDL2 (default, multiplatform)
-  - Linux X11
-  - WebAssembly (WASM)
+  - SDL2 (OpenGL 3.3 core)
+  - WebAssembly (WebGL2)
+  - Linux X11 (legacy, not part of the GPU-only path)
 - a **graphics layer** (`pkg/gfx`) with abstractions for:
   - windows
   - panes and layered panels
@@ -24,30 +24,32 @@ The project is intended as a foundation for experimenting with graphics, input e
 
 ## Quick Example
 
-A minimal example using `gfx.Window`:
+`gfx.NewWindow` requires a shader source string (single-source shader with stage/pass defines).
+See `cmd/main.go` and `cmd/shader.glsl` for a complete example.
 
 ```go
 package main
 
 import (
-	"log"
+	_ "embed"
 
 	"github.com/kjkrol/gokx/pkg/gfx"
 )
 
+//go:embed shader.glsl
+var shaderSource string
+
 func main() {
-	win, err := gfx.NewWindow("GOKX Demo", 800, 600)
-	if err != nil {
-		log.Fatalf("failed to create window: %v", err)
-	}
+	win := gfx.NewWindow(gfx.WindowConfig{
+		Width:  800,
+		Height: 600,
+		Title:  "GOKX Demo",
+	}, gfx.RendererConfig{ShaderSource: shaderSource})
 	defer win.Close()
 
-	for win.IsOpen() {
-		win.PollEvents()
-		win.Clear()
-		// TODO: draw objects here
-		win.Display()
-	}
+	win.Show()
+	win.RefreshRate(60)
+	win.ListenEvents(func(event gfx.Event) {})
 }
 ```
 
@@ -55,11 +57,7 @@ func main() {
 
 ```sh
 go build -o gokx ./cmd
-# or with X11 wrapper
-go build -tags x11 -o gokx ./cmd
 # or with make
-make build-x11
-# or
 make build-sdl2
 ```
 
@@ -87,21 +85,6 @@ Run example:
 go run cmd/main.go
 # or
 make run-sdl2
-```
-
-#### Linux X11 backend
-
-```sh
-sudo apt update
-sudo apt install libx11-dev
-```
-
-Run example:
-
-```sh
-go run -tags x11 cmd/main.go
-# or
-make run-x11
 ```
 
 #### WASM backend

@@ -4,18 +4,16 @@ package platform
 
 import (
 	"fmt"
-	"image"
 	"syscall/js"
 	"time"
 )
 
 type wasmWindowWrapper struct {
-	canvas         js.Value
-	ctx            js.Value
-	events         chan Event
-	conf           WindowConfig
-	closed         bool
-	surfaceFactory SurfaceFactory
+	canvas js.Value
+	gl     js.Value
+	events chan Event
+	conf   WindowConfig
+	closed bool
 
 	funcs   []js.Func
 	removes []struct {
@@ -44,14 +42,16 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 
 	doc.Get("body").Call("appendChild", canvas)
 
-	ctx := canvas.Call("getContext", "2d")
+	gl := canvas.Call("getContext", "webgl2")
+	if gl.IsNull() || gl.IsUndefined() {
+		panic("webgl2 context is required")
+	}
 
 	w := &wasmWindowWrapper{
-		canvas:         canvas,
-		ctx:            ctx,
-		events:         make(chan Event, 64),
-		conf:           conf,
-		surfaceFactory: DefaultSurfaceFactory(),
+		canvas: canvas,
+		gl:     gl,
+		events: make(chan Event, 64),
+		conf:   conf,
 	}
 
 	// helper do listenerów
@@ -188,8 +188,11 @@ func NewPlatformWindowWrapper(conf WindowConfig) PlatformWindowWrapper {
 }
 
 func (w *wasmWindowWrapper) Show() {
-	w.ctx.Set("fillStyle", "#000000")
-	w.ctx.Call("fillRect", 0, 0, w.canvas.Get("width").Int(), w.canvas.Get("height").Int())
+	if w.gl.IsUndefined() || w.gl.IsNull() {
+		return
+	}
+	w.gl.Call("clearColor", 0, 0, 0, 1)
+	w.gl.Call("clear", w.gl.Get("COLOR_BUFFER_BIT"))
 }
 
 func (w *wasmWindowWrapper) Close() {
@@ -220,58 +223,9 @@ func (w *wasmWindowWrapper) NextEventTimeout(timeoutMs int) Event {
 	}
 }
 
-func (w *wasmWindowWrapper) SurfaceFactory() SurfaceFactory {
-	return w.surfaceFactory
-}
-
-func (w *wasmWindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, offsetY int) PlatformImageWrapper {
-	return &wasmImageWrapper{parent: w, img: img, offsetX: offsetX, offsetY: offsetY}
-}
-
 func (w *wasmWindowWrapper) BeginFrame() {}
 func (w *wasmWindowWrapper) EndFrame()   {}
 
-// ---------------- IMAGE ----------------
-
-type wasmImageWrapper struct {
-	parent  *wasmWindowWrapper
-	img     *image.RGBA
-	offsetX int
-	offsetY int
-}
-
-func (i *wasmImageWrapper) Update(rect image.Rectangle) {
-	if rect.Empty() {
-		return
-	}
-
-	rect = rect.Intersect(i.img.Rect)
-	if rect.Empty() {
-		return
-	}
-
-	width := rect.Dx()
-	height := rect.Dy()
-	startX := rect.Min.X - i.img.Rect.Min.X
-	startY := rect.Min.Y - i.img.Rect.Min.Y
-	stride := i.img.Stride
-
-	buf := make([]byte, width*height*4)
-	for y := 0; y < height; y++ {
-		srcOffset := (startY+y)*stride + startX*4
-		dstOffset := y * width * 4
-		copy(buf[dstOffset:dstOffset+width*4], i.img.Pix[srcOffset:srcOffset+width*4])
-	}
-
-	uint8Array := js.Global().Get("Uint8ClampedArray").New(len(buf))
-	js.CopyBytesToJS(uint8Array, buf)
-	imageData := js.Global().Get("ImageData").New(uint8Array, width, height)
-
-	drawX := i.offsetX + startX
-	drawY := i.offsetY + startY
-	i.parent.ctx.Call("putImageData", imageData, drawX, drawY)
-}
-
-func (i *wasmImageWrapper) Delete() {
-	// nic do sprzątania — GC + Close() zrobi swoje
+func (w *wasmWindowWrapper) GLContext() any {
+	return w.gl
 }
