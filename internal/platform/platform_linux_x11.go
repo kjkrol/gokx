@@ -3,9 +3,11 @@
 package platform
 
 /*
-#cgo LDFLAGS: -lX11
+#cgo LDFLAGS: -lX11 -lEGL
 #include <stdlib.h>
 #include <X11/Xlib.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 
 void destroyImage(XImage *image) {
     if (image) {
@@ -242,6 +244,10 @@ type x11WindowWrapper struct {
 	readFD         syscall.FdSet
 	timeval        syscall.Timeval
 	surfaceFactory SurfaceFactory
+	eglDisplay     C.EGLDisplay
+	eglConfig      C.EGLConfig
+	eglSurface     C.EGLSurface
+	eglContext     C.EGLContext
 }
 
 func (w *x11WindowWrapper) Show() {
@@ -252,6 +258,7 @@ func (w *x11WindowWrapper) Show() {
 	C.XSelectInput(w.conn.display, w.window, DefaultMask)
 }
 func (w *x11WindowWrapper) Close() {
+	w.destroyEGL()
 	C.XDestroyWindow(w.conn.display, w.window)
 	C.free(unsafe.Pointer(w.title))
 	w.conn.Close()
@@ -261,6 +268,13 @@ func (w *x11WindowWrapper) Close() {
 func (w *x11WindowWrapper) NextEventTimeout(timeoutMs int) Event {
 	if w.fd == 0 {
 		w.fd = int(C.getConnectionNumber(w.conn.display))
+	}
+
+	// Drain queued events without waiting on select.
+	if C.XPending(w.conn.display) > 0 {
+		var ev C.XEvent
+		C.XNextEvent(w.conn.display, &ev)
+		return convert(ev)
 	}
 
 	if timeoutMs < 0 {
@@ -292,8 +306,29 @@ func (w *x11WindowWrapper) SurfaceFactory() SurfaceFactory {
 	return w.surfaceFactory
 }
 
-func (w *x11WindowWrapper) BeginFrame() {}
-func (w *x11WindowWrapper) EndFrame()   {}
+func (w *x11WindowWrapper) BeginFrame() {
+	if w.conn == nil {
+		return
+	}
+	if w.eglDisplay == eglNoDisplay() {
+		w.initEGL()
+		return
+	}
+	if w.eglSurface != eglNoSurface() && w.eglContext != eglNoContext() {
+		if C.eglMakeCurrent(w.eglDisplay, w.eglSurface, w.eglSurface, w.eglContext) == C.EGL_FALSE {
+			panic(fmt.Sprintf("EGL: eglMakeCurrent failed: %v", eglError()))
+		}
+	}
+}
+
+func (w *x11WindowWrapper) EndFrame() {
+	if w.eglDisplay == eglNoDisplay() || w.eglSurface == eglNoSurface() {
+		return
+	}
+	if C.eglSwapBuffers(w.eglDisplay, w.eglSurface) == C.EGL_FALSE {
+		panic(fmt.Sprintf("EGL: eglSwapBuffers failed: %v", eglError()))
+	}
+}
 func (w *x11WindowWrapper) GLContext() any {
 	return nil
 }
@@ -303,6 +338,103 @@ func (w *x11WindowWrapper) NewPlatformImageWrapper(img *image.RGBA, offsetX, off
 }
 
 // ----------------------------------------------------------------------------
+
+func (w *x11WindowWrapper) initEGL() {
+	if w.conn == nil || w.conn.display == nil {
+		return
+	}
+	if w.eglDisplay != eglNoDisplay() {
+		return
+	}
+
+	display := C.eglGetDisplay(C.EGLNativeDisplayType(unsafe.Pointer(w.conn.display)))
+	if display == eglNoDisplay() {
+		panic(fmt.Sprintf("EGL: eglGetDisplay failed: %v", eglError()))
+	}
+
+	if C.eglInitialize(display, nil, nil) == C.EGL_FALSE {
+		panic(fmt.Sprintf("EGL: eglInitialize failed: %v", eglError()))
+	}
+
+	if C.eglBindAPI(C.EGL_OPENGL_API) == C.EGL_FALSE {
+		panic(fmt.Sprintf("EGL: eglBindAPI failed: %v", eglError()))
+	}
+
+	attrs := []C.EGLint{
+		C.EGL_SURFACE_TYPE, C.EGL_WINDOW_BIT,
+		C.EGL_RENDERABLE_TYPE, C.EGL_OPENGL_BIT,
+		C.EGL_RED_SIZE, 8,
+		C.EGL_GREEN_SIZE, 8,
+		C.EGL_BLUE_SIZE, 8,
+		C.EGL_ALPHA_SIZE, 8,
+		C.EGL_DEPTH_SIZE, 24,
+		C.EGL_STENCIL_SIZE, 8,
+		C.EGL_NONE,
+	}
+	var config C.EGLConfig
+	var num C.EGLint
+	if C.eglChooseConfig(display, &attrs[0], &config, 1, &num) == C.EGL_FALSE || num == 0 {
+		panic(fmt.Sprintf("EGL: eglChooseConfig failed: %v", eglError()))
+	}
+
+	surface := C.eglCreateWindowSurface(display, config, C.EGLNativeWindowType(w.window), nil)
+	if surface == eglNoSurface() {
+		panic(fmt.Sprintf("EGL: eglCreateWindowSurface failed: %v", eglError()))
+	}
+
+	ctxAttrs := []C.EGLint{
+		C.EGL_CONTEXT_MAJOR_VERSION, 3,
+		C.EGL_CONTEXT_MINOR_VERSION, 3,
+		C.EGL_NONE,
+	}
+	context := C.eglCreateContext(display, config, eglNoContext(), &ctxAttrs[0])
+	if context == eglNoContext() {
+		panic(fmt.Sprintf("EGL: eglCreateContext failed: %v", eglError()))
+	}
+
+	if C.eglMakeCurrent(display, surface, surface, context) == C.EGL_FALSE {
+		panic(fmt.Sprintf("EGL: eglMakeCurrent failed: %v", eglError()))
+	}
+	C.eglSwapInterval(display, 1)
+
+	w.eglDisplay = display
+	w.eglConfig = config
+	w.eglSurface = surface
+	w.eglContext = context
+}
+
+func (w *x11WindowWrapper) destroyEGL() {
+	if w.eglDisplay == eglNoDisplay() {
+		return
+	}
+	C.eglMakeCurrent(w.eglDisplay, eglNoSurface(), eglNoSurface(), eglNoContext())
+	if w.eglContext != eglNoContext() {
+		C.eglDestroyContext(w.eglDisplay, w.eglContext)
+		w.eglContext = eglNoContext()
+	}
+	if w.eglSurface != eglNoSurface() {
+		C.eglDestroySurface(w.eglDisplay, w.eglSurface)
+		w.eglSurface = eglNoSurface()
+	}
+	C.eglTerminate(w.eglDisplay)
+	w.eglDisplay = eglNoDisplay()
+}
+
+func eglError() error {
+	return fmt.Errorf("0x%04x", uint32(C.eglGetError()))
+}
+
+func eglNoDisplay() C.EGLDisplay {
+	return C.EGLDisplay(unsafe.Pointer(nil))
+}
+
+func eglNoSurface() C.EGLSurface {
+	return C.EGLSurface(unsafe.Pointer(nil))
+}
+
+func eglNoContext() C.EGLContext {
+	return C.EGLContext(unsafe.Pointer(nil))
+}
 
 func decodeKeyEvent(keyEvent *C.XKeyEvent) (uint64, string) {
 	keysym := C.XLookupKeysym(keyEvent, 0)

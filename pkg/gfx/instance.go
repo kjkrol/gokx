@@ -9,6 +9,16 @@ import (
 
 const floatsPerInstance = 12
 
+type instanceRange struct {
+	start int
+	count int
+}
+
+type instanceUpdate struct {
+	offset int
+	data   []float32
+}
+
 func appendInstanceData(dst []float32, shape plane.AABB[int], style SpatialStyle) []float32 {
 	dst = appendAABBInstance(dst, shape.AABB, style)
 	shape.VisitFragments(func(pos plane.FragPosition, aabb geom.AABB[int]) bool {

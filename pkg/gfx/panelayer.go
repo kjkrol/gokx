@@ -13,16 +13,19 @@ type Layer struct {
 	background    color.Color
 	instanceData  []float32
 	instanceCount int
-	dirty         bool
+	ranges        map[*Drawable]instanceRange
+	pending       []instanceUpdate
+	fullRebuild   bool
+	needsRedraw   bool
 	batchDepth    int
 	batchedDirty  bool
 }
 
 func NewLayer(pane *Pane) *Layer {
 	layer := &Layer{
-		pane:      pane,
-		drawables: make([]*Drawable, 0),
-		dirty:     true,
+		pane:        pane,
+		drawables:   make([]*Drawable, 0),
+		needsRedraw: true,
 	}
 	return layer
 }
@@ -60,6 +63,15 @@ func (l *Layer) AddDrawable(drawable *Drawable) {
 	}
 	l.drawables = append(l.drawables, drawable)
 	drawable.attach(l)
+	if l.fullRebuild {
+		l.markDirtyLocked()
+		l.mu.Unlock()
+		return
+	}
+	if l.ranges == nil {
+		l.ranges = make(map[*Drawable]instanceRange)
+	}
+	l.appendDrawableLocked(drawable)
 	l.markDirtyLocked()
 	l.mu.Unlock()
 }
@@ -86,7 +98,10 @@ func (l *Layer) RemoveDrawable(drawable *Drawable) {
 		l.drawables = append(l.drawables[:idx], l.drawables[idx+1:]...)
 	}
 	drawable.detach()
-	l.markDirtyLocked()
+	if l.ranges != nil {
+		delete(l.ranges, drawable)
+	}
+	l.markFullRebuildLocked()
 	l.mu.Unlock()
 }
 
@@ -122,6 +137,36 @@ func (l *Layer) ModifyDrawable(drawable *Drawable, mutate func()) {
 		l.mu.Unlock()
 		return
 	}
+	if l.fullRebuild {
+		l.markDirtyLocked()
+		l.mu.Unlock()
+		return
+	}
+	if l.ranges == nil {
+		l.markFullRebuildLocked()
+		l.mu.Unlock()
+		return
+	}
+	rangeInfo, ok := l.ranges[drawable]
+	if !ok {
+		l.markFullRebuildLocked()
+		l.mu.Unlock()
+		return
+	}
+	newData := appendInstanceData(nil, drawable.AABB, drawable.Style)
+	newCount := len(newData) / floatsPerInstance
+	if newCount != rangeInfo.count {
+		l.markFullRebuildLocked()
+		l.mu.Unlock()
+		return
+	}
+	if len(newData) > 0 {
+		copy(l.instanceData[rangeInfo.start:rangeInfo.start+len(newData)], newData)
+		l.pending = append(l.pending, instanceUpdate{
+			offset: rangeInfo.start * 4,
+			data:   newData,
+		})
+	}
 	l.markDirtyLocked()
 	l.mu.Unlock()
 }
@@ -137,7 +182,7 @@ func (l *Layer) endBatch() {
 	if l.batchDepth > 0 {
 		l.batchDepth--
 		if l.batchDepth == 0 && l.batchedDirty {
-			l.dirty = true
+			l.needsRedraw = true
 			l.batchedDirty = false
 		}
 	}
@@ -155,28 +200,84 @@ func (l *Layer) markDirtyLocked() {
 		l.batchedDirty = true
 		return
 	}
-	l.dirty = true
+	l.needsRedraw = true
 }
 
-func (l *Layer) consumeInstances(force bool) (data []float32, count int, bg color.Color, dirty bool) {
+func (l *Layer) markFullRebuildLocked() {
+	l.fullRebuild = true
+	l.pending = nil
+	l.markDirtyLocked()
+}
+
+func (l *Layer) appendDrawableLocked(drawable *Drawable) {
+	data := appendInstanceData(nil, drawable.AABB, drawable.Style)
+	start := len(l.instanceData)
+	l.instanceData = append(l.instanceData, data...)
+	count := len(data) / floatsPerInstance
+	l.ranges[drawable] = instanceRange{start: start, count: count}
+	l.instanceCount += count
+	if len(data) > 0 {
+		l.pending = append(l.pending, instanceUpdate{
+			offset: start * 4,
+			data:   data,
+		})
+	}
+}
+
+func (l *Layer) consumeInstances(force bool) (fullData []float32, updates []instanceUpdate, count int, bg color.Color, dirty bool) {
 	l.mu.Lock()
-	if !l.dirty && !force {
+	if !l.needsRedraw && !force {
 		bg = l.background
+		count = l.instanceCount
 		l.mu.Unlock()
-		return nil, 0, bg, false
+		return nil, nil, count, bg, false
 	}
-	l.instanceData = l.instanceData[:0]
-	for _, drawable := range l.drawables {
-		if drawable == nil {
-			continue
+	if force || l.fullRebuild || l.ranges == nil {
+		l.instanceData = l.instanceData[:0]
+		l.instanceCount = 0
+		if l.ranges == nil {
+			l.ranges = make(map[*Drawable]instanceRange, len(l.drawables))
+		} else {
+			for key := range l.ranges {
+				delete(l.ranges, key)
+			}
 		}
-		l.instanceData = appendInstanceData(l.instanceData, drawable.AABB, drawable.Style)
+		for _, drawable := range l.drawables {
+			if drawable == nil {
+				continue
+			}
+			data := appendInstanceData(nil, drawable.AABB, drawable.Style)
+			start := len(l.instanceData)
+			l.instanceData = append(l.instanceData, data...)
+			instCount := len(data) / floatsPerInstance
+			l.ranges[drawable] = instanceRange{start: start, count: instCount}
+			l.instanceCount += instCount
+		}
+		fullData = append([]float32(nil), l.instanceData...)
+		count = l.instanceCount
+		bg = l.background
+		l.fullRebuild = false
+		l.pending = nil
+		l.needsRedraw = false
+		l.mu.Unlock()
+		return fullData, nil, count, bg, true
 	}
-	data = append([]float32(nil), l.instanceData...)
-	count = len(data) / floatsPerInstance
-	l.instanceCount = count
-	l.dirty = false
+
+	if len(l.pending) > 0 {
+		updates = append([]instanceUpdate(nil), l.pending...)
+	}
+	count = l.instanceCount
 	bg = l.background
+	l.pending = nil
+	l.needsRedraw = false
 	l.mu.Unlock()
-	return data, count, bg, true
+	return nil, updates, count, bg, true
+}
+
+func (l *Layer) snapshotInstances() (data []float32, count int) {
+	l.mu.Lock()
+	data = append([]float32(nil), l.instanceData...)
+	count = l.instanceCount
+	l.mu.Unlock()
+	return data, count
 }

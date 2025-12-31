@@ -191,12 +191,23 @@ func (r *renderer) renderLayer(layer *Layer, width, height int) {
 		state = r.ensureLayerState(layer, width, height)
 	}
 
-	data, count, bg, dirty := layer.consumeInstances(force)
+	fullData, updates, count, bg, dirty := layer.consumeInstances(force)
 	if !dirty {
 		return
 	}
 
-	r.updateInstanceBuffer(state, data)
+	required := count * floatsPerInstance * 4
+	if fullData == nil && required > state.instanceCap {
+		fullData, count = layer.snapshotInstances()
+		updates = nil
+		required = count * floatsPerInstance * 4
+	}
+
+	if fullData != nil {
+		r.updateInstanceBufferFull(state, fullData)
+	} else if len(updates) > 0 {
+		r.updateInstanceBufferRanges(state, updates)
+	}
 
 	gl.BindFramebuffer(gl.FRAMEBUFFER, state.fbo)
 	gl.Viewport(0, 0, int32(state.width), int32(state.height))
@@ -264,19 +275,36 @@ func (r *renderer) resizeLayerTexture(state *layerState) {
 	gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state.texture, 0)
 }
 
-func (r *renderer) updateInstanceBuffer(state *layerState, data []float32) {
+func (r *renderer) updateInstanceBufferFull(state *layerState, data []float32) {
 	gl.BindBuffer(gl.ARRAY_BUFFER, state.instanceVbo)
-	size := len(data) * 4
-	if size == 0 {
+	required := len(data) * 4
+	if required == 0 {
 		gl.BufferData(gl.ARRAY_BUFFER, 0, nil, gl.DYNAMIC_DRAW)
+		state.instanceCap = 0
 		return
 	}
-	if size > state.instanceCap {
-		gl.BufferData(gl.ARRAY_BUFFER, size, gl.Ptr(data), gl.DYNAMIC_DRAW)
-		state.instanceCap = size
-		return
+	if required > state.instanceCap {
+		newCap := required
+		if state.instanceCap > 0 {
+			newCap = state.instanceCap * 2
+			if newCap < required {
+				newCap = required
+			}
+		}
+		gl.BufferData(gl.ARRAY_BUFFER, newCap, nil, gl.DYNAMIC_DRAW)
+		state.instanceCap = newCap
 	}
-	gl.BufferSubData(gl.ARRAY_BUFFER, 0, size, gl.Ptr(data))
+	gl.BufferSubData(gl.ARRAY_BUFFER, 0, required, gl.Ptr(data))
+}
+
+func (r *renderer) updateInstanceBufferRanges(state *layerState, updates []instanceUpdate) {
+	gl.BindBuffer(gl.ARRAY_BUFFER, state.instanceVbo)
+	for _, update := range updates {
+		if len(update.data) == 0 {
+			continue
+		}
+		gl.BufferSubData(gl.ARRAY_BUFFER, update.offset, len(update.data)*4, gl.Ptr(update.data))
+	}
 }
 
 func (r *renderer) buildProgram(pass string) uint32 {

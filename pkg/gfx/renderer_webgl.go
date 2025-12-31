@@ -258,12 +258,23 @@ func (r *renderer) renderLayer(layer *Layer, width, height int) {
 		state = r.ensureLayerState(layer, width, height)
 	}
 
-	data, count, bg, dirty := layer.consumeInstances(force)
+	fullData, updates, count, bg, dirty := layer.consumeInstances(force)
 	if !dirty {
 		return
 	}
 
-	r.updateInstanceBuffer(state, data)
+	required := count * floatsPerInstance * 4
+	if fullData == nil && required > state.instanceCap {
+		fullData, count = layer.snapshotInstances()
+		updates = nil
+		required = count * floatsPerInstance * 4
+	}
+
+	if fullData != nil {
+		r.updateInstanceBufferFull(state, fullData)
+	} else if len(updates) > 0 {
+		r.updateInstanceBufferRanges(state, updates)
+	}
 
 	r.gl.Call("bindFramebuffer", r.consts.framebuffer, state.fbo)
 	r.gl.Call("viewport", 0, 0, state.width, state.height)
@@ -331,21 +342,40 @@ func (r *renderer) resizeLayerTexture(state *layerState) {
 	r.gl.Call("framebufferTexture2D", r.consts.framebuffer, r.consts.colorAttachment0, r.consts.texture2D, state.texture, 0)
 }
 
-func (r *renderer) updateInstanceBuffer(state *layerState, data []float32) {
+func (r *renderer) updateInstanceBufferFull(state *layerState, data []float32) {
 	r.gl.Call("bindBuffer", r.consts.arrayBuffer, state.instanceVbo)
-	if len(data) == 0 {
+	required := len(data) * 4
+	if required == 0 {
 		r.gl.Call("bufferData", r.consts.arrayBuffer, 0, r.consts.dynamicDraw)
+		state.instanceCap = 0
 		return
 	}
-	byteLen := len(data) * 4
+	if required > state.instanceCap {
+		newCap := required
+		if state.instanceCap > 0 {
+			newCap = state.instanceCap * 2
+			if newCap < required {
+				newCap = required
+			}
+		}
+		r.gl.Call("bufferData", r.consts.arrayBuffer, newCap, r.consts.dynamicDraw)
+		state.instanceCap = newCap
+	}
 	arr := js.TypedArrayOf(data)
 	defer arr.Release()
-	if byteLen > state.instanceCap {
-		r.gl.Call("bufferData", r.consts.arrayBuffer, arr, r.consts.dynamicDraw)
-		state.instanceCap = byteLen
-		return
-	}
 	r.gl.Call("bufferSubData", r.consts.arrayBuffer, 0, arr)
+}
+
+func (r *renderer) updateInstanceBufferRanges(state *layerState, updates []instanceUpdate) {
+	r.gl.Call("bindBuffer", r.consts.arrayBuffer, state.instanceVbo)
+	for _, update := range updates {
+		if len(update.data) == 0 {
+			continue
+		}
+		arr := js.TypedArrayOf(update.data)
+		r.gl.Call("bufferSubData", r.consts.arrayBuffer, update.offset, arr)
+		arr.Release()
+	}
 }
 
 func (r *renderer) buildProgram(pass string) js.Value {

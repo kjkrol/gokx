@@ -40,7 +40,7 @@ void main() {
 		1.0 - (pos.y / uViewport.y) * 2.0
 	);
 	gl_Position = vec4(ndc, 0.0, 1.0);
-	vUV = aPos;
+	vUV = vec2(aPos.x, 1.0 - aPos.y);
 }
 #endif
 #endif
