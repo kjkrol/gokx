@@ -6,6 +6,8 @@ layout(location = 2) in vec4 iFill;
 layout(location = 3) in vec4 iStroke;
 
 uniform vec2 uViewport;
+uniform vec2 uOrigin;
+uniform vec2 uWorld;
 
 out vec2 vLocal;
 out vec2 vSize;
@@ -13,8 +15,18 @@ out vec4 vFill;
 out vec4 vStroke;
 
 void main() {
-	vec2 size = iRect.zw - iRect.xy;
-	vec2 pos = iRect.xy + aPos * size;
+	vec2 tl = iRect.xy;
+	vec2 br = iRect.zw;
+	if (uWorld.x > 0.0 && tl.x < uOrigin.x) {
+		tl.x += uWorld.x;
+		br.x += uWorld.x;
+	}
+	if (uWorld.y > 0.0 && tl.y < uOrigin.y) {
+		tl.y += uWorld.y;
+		br.y += uWorld.y;
+	}
+	vec2 size = br - tl;
+	vec2 pos = (tl - uOrigin) + aPos * size;
 	vec2 ndc = vec2(
 		(pos.x / uViewport.x) * 2.0 - 1.0,
 		1.0 - (pos.y / uViewport.y) * 2.0
@@ -30,6 +42,7 @@ layout(location = 0) in vec2 aPos;
 
 uniform vec2 uViewport;
 uniform vec4 uRect;
+uniform vec4 uTexRect;
 
 out vec2 vUV;
 
@@ -40,7 +53,8 @@ void main() {
 		1.0 - (pos.y / uViewport.y) * 2.0
 	);
 	gl_Position = vec4(ndc, 0.0, 1.0);
-	vUV = vec2(aPos.x, 1.0 - aPos.y);
+	vec2 uv = mix(uTexRect.xy, uTexRect.zw, aPos);
+	vUV = vec2(uv.x, 1.0 - uv.y);
 }
 #endif
 #endif

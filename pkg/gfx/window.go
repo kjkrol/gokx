@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokx/internal/platform"
+	"github.com/kjkrol/gokx/pkg/grid"
 )
 
 type WindowConfig struct {
@@ -17,6 +19,7 @@ type WindowConfig struct {
 	Height      int
 	BorderWidth int
 	Title       string
+	Grid        GridConfig
 }
 
 func (w WindowConfig) convert() platform.WindowConfig {
@@ -38,6 +41,8 @@ type Window struct {
 	cancel             context.CancelFunc
 
 	updates chan func()
+
+	gridManagers map[*Pane]*grid.MultiBucketGridManager
 }
 
 const maxEventWait = 50 * time.Millisecond
@@ -52,6 +57,7 @@ func NewWindow(conf WindowConfig, renderer RendererConfig) *Window {
 		panes:              make(map[string]*Pane),
 		updates:            make(chan func(), 1024),
 		rendererConfig:     renderer,
+		gridManagers:       make(map[*Pane]*grid.MultiBucketGridManager),
 		width:              conf.Width,
 		height:             conf.Height,
 	}
@@ -64,8 +70,10 @@ func NewWindow(conf WindowConfig, renderer RendererConfig) *Window {
 			Height:  conf.Height,
 			OffsetX: 0,
 			OffsetY: 0,
+			Grid:    conf.Grid,
 		},
 	)
+	window.ensureGridForPane(window.defaultPane)
 	window.renderer = newRenderer(window.platformWinWrapper, renderer)
 	window.ctx, window.cancel = context.WithCancel(context.Background())
 	window.rerfreshing = false
@@ -75,6 +83,7 @@ func NewWindow(conf WindowConfig, renderer RendererConfig) *Window {
 func (w *Window) AddPane(name string, conf *PaneConfig) *Pane {
 	pane := newPane(conf)
 	w.panes[name] = pane
+	w.ensureGridForPane(pane)
 	return pane
 }
 
@@ -114,17 +123,28 @@ func (w *Window) Close() {
 		pane.Close()
 	}
 	w.panes = nil
+	w.gridManagers = nil
 	w.platformWinWrapper.Close()
 
 }
 
-func (w *Window) ListenEvents(handleEvent func(event Event)) {
+func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsConsumerStrategy) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	delay := w.refreshDelay
 	if delay == 0 {
 		delay = time.Second / 60 // domyślnie 60 FPS
+	}
+	if strategy == nil {
+		strategy = DrainAll()
+	}
+	poll := func(timeoutMs int) (Event, bool) {
+		platformEvent := w.platformWinWrapper.NextEventTimeout(timeoutMs)
+		if _, ok := platformEvent.(platform.TimeoutEvent); ok {
+			return nil, false
+		}
+		return convert(platformEvent), true
 	}
 
 	nextRender := time.Now().Add(delay)
@@ -149,15 +169,7 @@ func (w *Window) ListenEvents(handleEvent func(event Event)) {
 				timeoutMs = 1
 			}
 
-			platformEvent := w.platformWinWrapper.NextEventTimeout(timeoutMs)
-
-			switch ev := platformEvent.(type) {
-			case platform.TimeoutEvent:
-				// brak eventu — nic nie robimy tutaj
-			default:
-				event := convert(ev)
-				handleEvent(event)
-			}
+			strategy.Consume(poll, handleEvent, timeoutMs)
 
 			// sprawdź czy czas na render
 			now = time.Now()
@@ -200,4 +212,61 @@ func (w *Window) panesSnapshot() []*Pane {
 		out = append(out, pane)
 	}
 	return out
+}
+
+func (w *Window) gridForPane(pane *Pane) *grid.MultiBucketGridManager {
+	if w == nil {
+		return nil
+	}
+	return w.gridManagers[pane]
+}
+
+func (w *Window) ensureGridForPane(pane *Pane) {
+	if w == nil || pane == nil || pane.Config == nil {
+		return
+	}
+	if _, ok := w.gridManagers[pane]; ok {
+		return
+	}
+	gridConf := normalizeGridConfig(pane.Config.Grid, pane.Config.Width, pane.Config.Height)
+	pane.Config.Grid = gridConf
+	worldSide := int(gridConf.WorldResolution.Side())
+	var space plane.Space2D[int]
+	if gridConf.WorldWrap {
+		space = plane.NewToroidal2D(worldSide, worldSide)
+	} else {
+		space = plane.NewEuclidean2D(worldSide, worldSide)
+	}
+	manager := grid.NewMultiBucketGridManager(
+		space,
+		gridConf.WorldResolution,
+		gridConf.CacheMarginBuckets,
+		gridConf.DefaultBucketResolution,
+		gridConf.DefaultBucketCapacity,
+	)
+	w.gridManagers[pane] = manager
+	pane.setLayerObserver(func(layer *Layer) {
+		w.registerLayer(manager, pane, layer)
+	})
+	for _, layer := range pane.Layers() {
+		w.registerLayer(manager, pane, layer)
+	}
+}
+
+func (w *Window) registerLayer(manager *grid.MultiBucketGridManager, pane *Pane, layer *Layer) {
+	if manager == nil || pane == nil || layer == nil {
+		return
+	}
+	cfg := layer.gridConfig
+	if !layer.gridConfigSet {
+		cfg = grid.LayerConfig{
+			BucketResolution: pane.Config.Grid.DefaultBucketResolution,
+			BucketCapacity:   pane.Config.Grid.DefaultBucketCapacity,
+		}
+	}
+	gridMgr, err := manager.Register(layer, cfg)
+	if err != nil {
+		panic(err)
+	}
+	layer.attachGridManager(manager, gridMgr)
 }

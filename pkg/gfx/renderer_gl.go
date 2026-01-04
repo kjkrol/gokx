@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
+	"github.com/kjkrol/gokg/pkg/geom"
 	"github.com/kjkrol/gokx/internal/platform"
+	"github.com/kjkrol/gokx/pkg/grid"
 )
 
 type renderer struct {
@@ -20,27 +22,48 @@ type renderer struct {
 	compositeVao     uint32
 
 	colorViewportUniform     int32
+	colorOriginUniform       int32
+	colorWorldUniform        int32
 	compositeViewportUniform int32
 	compositeRectUniform     int32
 	compositeTexUniform      int32
+	compositeTexRectUniform  int32
 
 	layerStates map[*Layer]*layerState
+	paneViews   map[*Pane]uint64
+	paneStates  map[*Pane]*paneState
 }
 
 type layerState struct {
+	texture uint32
+	fbo     uint32
+	width   int
+	height  int
+	buckets map[uint32]*bucketState
+}
+
+type bucketState struct {
 	vao         uint32
 	instanceVbo uint32
 	instanceCap int
-	texture     uint32
-	fbo         uint32
-	width       int
-	height      int
+	entries     []uint64
+	index       map[uint64]int
+	data        []float32
+}
+
+type paneState struct {
+	texture uint32
+	fbo     uint32
+	width   int
+	height  int
 }
 
 func newRenderer(_ platform.PlatformWindowWrapper, conf RendererConfig) *renderer {
 	return &renderer{
 		shaderSource: conf.ShaderSource,
 		layerStates:  make(map[*Layer]*layerState),
+		paneViews:    make(map[*Pane]uint64),
+		paneStates:   make(map[*Pane]*paneState),
 	}
 }
 
@@ -57,17 +80,73 @@ func (r *renderer) Render(w *Window) {
 	}
 
 	panes := w.panesSnapshot()
+	type paneFrame struct {
+		pane       *Pane
+		layers     []*Layer
+		plan       grid.FramePlan
+		layerPlans map[*Layer]grid.LayerPlan
+		worldSize  geom.Vec[int]
+	}
+	paneFrames := make([]paneFrame, 0, len(panes))
 
 	for _, pane := range panes {
 		if pane == nil || pane.Config == nil {
 			continue
 		}
-		for _, layer := range pane.Layers() {
-			if layer == nil {
+		view := pane.Viewport()
+		if view == nil {
+			continue
+		}
+		manager := w.gridForPane(pane)
+		if manager == nil {
+			continue
+		}
+		layers := pane.Layers()
+		keys := make([]any, 0, len(layers))
+		for _, layer := range layers {
+			keys = append(keys, layer)
+		}
+		viewVersion := view.Version()
+		prevVersion, ok := r.paneViews[pane]
+		viewChanged := !ok || prevVersion != viewVersion
+		if viewChanged {
+			r.paneViews[pane] = viewVersion
+		}
+		frame := manager.BuildFrame(view.Rect(), viewChanged, keys)
+		layerPlans := make(map[*Layer]grid.LayerPlan, len(frame.Layers))
+		for _, layerPlan := range frame.Layers {
+			layer, ok := layerPlan.Key.(*Layer)
+			if !ok || layer == nil {
 				continue
 			}
-			r.renderLayer(layer, pane.Config.Width, pane.Config.Height)
+			layerPlans[layer] = layerPlan
 		}
+		worldSize := view.WorldSize()
+		viewSize := view.Size()
+		if !view.Wrap() || viewSize.X >= worldSize.X || viewSize.Y >= worldSize.Y {
+			worldSize = geom.NewVec(0, 0)
+		}
+		for _, layer := range layers {
+			plan, ok := layerPlans[layer]
+			if !ok {
+				continue
+			}
+			r.renderLayerBuckets(layer, plan, worldSize)
+		}
+		paneFrames = append(paneFrames, paneFrame{
+			pane:       pane,
+			layers:     layers,
+			plan:       frame,
+			layerPlans: layerPlans,
+			worldSize:  worldSize,
+		})
+	}
+
+	for _, frame := range paneFrames {
+		if len(frame.plan.CompositeRects) == 0 {
+			continue
+		}
+		r.compositePane(frame.pane, frame.layers, frame.layerPlans, frame.plan, frame.worldSize)
 	}
 
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
@@ -81,7 +160,12 @@ func (r *renderer) Render(w *Window) {
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.Uniform1i(r.compositeTexUniform, 0)
 
-	for _, pane := range panes {
+	for _, frame := range paneFrames {
+		state := r.paneStates[frame.pane]
+		if state == nil || state.texture == 0 {
+			continue
+		}
+		pane := frame.pane
 		if pane == nil || pane.Config == nil {
 			continue
 		}
@@ -90,15 +174,9 @@ func (r *renderer) Render(w *Window) {
 		x1 := float32(pane.Config.OffsetX + pane.Config.Width)
 		y1 := float32(pane.Config.OffsetY + pane.Config.Height)
 		gl.Uniform4f(r.compositeRectUniform, x0, y0, x1, y1)
-
-		for _, layer := range pane.Layers() {
-			state := r.layerStates[layer]
-			if state == nil || state.texture == 0 {
-				continue
-			}
-			gl.BindTexture(gl.TEXTURE_2D, state.texture)
-			gl.DrawArrays(gl.TRIANGLES, 0, 6)
-		}
+		gl.Uniform4f(r.compositeTexRectUniform, 0, 0, 1, 1)
+		gl.BindTexture(gl.TEXTURE_2D, state.texture)
+		gl.DrawArrays(gl.TRIANGLES, 0, 6)
 	}
 }
 
@@ -116,11 +194,27 @@ func (r *renderer) Close() {
 		if state.fbo != 0 {
 			gl.DeleteFramebuffers(1, &state.fbo)
 		}
-		if state.instanceVbo != 0 {
-			gl.DeleteBuffers(1, &state.instanceVbo)
+		for _, bucket := range state.buckets {
+			if bucket == nil {
+				continue
+			}
+			if bucket.instanceVbo != 0 {
+				gl.DeleteBuffers(1, &bucket.instanceVbo)
+			}
+			if bucket.vao != 0 {
+				gl.DeleteVertexArrays(1, &bucket.vao)
+			}
 		}
-		if state.vao != 0 {
-			gl.DeleteVertexArrays(1, &state.vao)
+	}
+	for _, state := range r.paneStates {
+		if state == nil {
+			continue
+		}
+		if state.texture != 0 {
+			gl.DeleteTextures(1, &state.texture)
+		}
+		if state.fbo != 0 {
+			gl.DeleteFramebuffers(1, &state.fbo)
 		}
 	}
 	if r.quadVbo != 0 {
@@ -136,6 +230,7 @@ func (r *renderer) Close() {
 		gl.DeleteProgram(r.compositeProgram)
 	}
 	r.layerStates = nil
+	r.paneStates = nil
 	r.initialized = false
 }
 
@@ -151,9 +246,12 @@ func (r *renderer) ensureInit() {
 	r.compositeProgram = r.buildProgram("PASS_COMPOSITE")
 
 	r.colorViewportUniform = gl.GetUniformLocation(r.colorProgram, gl.Str("uViewport\x00"))
+	r.colorOriginUniform = gl.GetUniformLocation(r.colorProgram, gl.Str("uOrigin\x00"))
+	r.colorWorldUniform = gl.GetUniformLocation(r.colorProgram, gl.Str("uWorld\x00"))
 	r.compositeViewportUniform = gl.GetUniformLocation(r.compositeProgram, gl.Str("uViewport\x00"))
 	r.compositeRectUniform = gl.GetUniformLocation(r.compositeProgram, gl.Str("uRect\x00"))
 	r.compositeTexUniform = gl.GetUniformLocation(r.compositeProgram, gl.Str("uTex\x00"))
+	r.compositeTexRectUniform = gl.GetUniformLocation(r.compositeProgram, gl.Str("uTexRect\x00"))
 
 	r.initQuad()
 
@@ -184,53 +282,229 @@ func (r *renderer) initQuad() {
 	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, 2*4, gl.PtrOffset(0))
 }
 
-func (r *renderer) renderLayer(layer *Layer, width, height int) {
-	state := r.layerStates[layer]
-	force := state == nil || state.width != width || state.height != height
-	if force {
-		state = r.ensureLayerState(layer, width, height)
-	}
-
-	fullData, updates, count, bg, dirty := layer.consumeInstances(force)
-	if !dirty {
+func (r *renderer) renderLayerBuckets(layer *Layer, plan grid.LayerPlan, worldSize geom.Vec[int]) {
+	if layer == nil {
 		return
 	}
+	manager := layer.GridManager()
+	if manager == nil {
+		return
+	}
+	cacheRect := plan.CacheRect
+	cacheWidth := cacheRect.BottomRight.X - cacheRect.TopLeft.X
+	cacheHeight := cacheRect.BottomRight.Y - cacheRect.TopLeft.Y
+	if cacheWidth <= 0 || cacheHeight <= 0 {
+		return
+	}
+	state := r.ensureLayerState(layer, cacheWidth, cacheHeight)
+	r.syncBucketStates(layer, manager, state)
+	if len(plan.Buckets) == 0 {
+		return
+	}
+	bgColor := colorToFloat(layer.Background())
 
-	required := count * floatsPerInstance * 4
-	if fullData == nil && required > state.instanceCap {
-		fullData, count = layer.snapshotInstances()
-		updates = nil
-		required = count * floatsPerInstance * 4
+	gl.BindFramebuffer(gl.FRAMEBUFFER, state.fbo)
+	gl.Viewport(0, 0, int32(state.width), int32(state.height))
+	gl.UseProgram(r.colorProgram)
+	gl.Uniform2f(r.colorViewportUniform, float32(state.width), float32(state.height))
+	gl.Uniform2f(r.colorOriginUniform, float32(cacheRect.TopLeft.X), float32(cacheRect.TopLeft.Y))
+	gl.Uniform2f(r.colorWorldUniform, float32(worldSize.X), float32(worldSize.Y))
+	gl.Enable(gl.SCISSOR_TEST)
+
+	for _, bucket := range plan.Buckets {
+		scissor := bucketScissor(bucket, cacheRect, worldSize, state.width, state.height)
+		if scissor.W <= 0 || scissor.H <= 0 {
+			continue
+		}
+		gl.Scissor(int32(scissor.X), int32(scissor.Y), int32(scissor.W), int32(scissor.H))
+		gl.ClearColor(bgColor[0], bgColor[1], bgColor[2], bgColor[3])
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+
+		bucketIdx, ok := manager.BucketIndex(bucket)
+		if !ok {
+			continue
+		}
+		bucketState := state.buckets[bucketIdx]
+		if bucketState == nil || len(bucketState.entries) == 0 {
+			continue
+		}
+		gl.BindVertexArray(bucketState.vao)
+		gl.DrawArraysInstanced(gl.TRIANGLES, 0, 6, int32(len(bucketState.entries)))
 	}
 
-	if fullData != nil {
-		r.updateInstanceBufferFull(state, fullData)
-	} else if len(updates) > 0 {
-		r.updateInstanceBufferRanges(state, updates)
+	gl.Disable(gl.SCISSOR_TEST)
+}
+
+func (r *renderer) compositePane(pane *Pane, layers []*Layer, layerPlans map[*Layer]grid.LayerPlan, frame grid.FramePlan, worldSize geom.Vec[int]) {
+	if pane == nil || pane.Config == nil {
+		return
+	}
+	state := r.ensurePaneState(pane, pane.Config.Width, pane.Config.Height)
+	if state == nil || state.texture == 0 {
+		return
+	}
+	if len(frame.CompositeRects) == 0 {
+		return
 	}
 
 	gl.BindFramebuffer(gl.FRAMEBUFFER, state.fbo)
 	gl.Viewport(0, 0, int32(state.width), int32(state.height))
-	bgColor := colorToFloat(bg)
-	gl.ClearColor(bgColor[0], bgColor[1], bgColor[2], bgColor[3])
-	gl.Clear(gl.COLOR_BUFFER_BIT)
+	gl.UseProgram(r.compositeProgram)
+	gl.BindVertexArray(r.compositeVao)
+	gl.Uniform2f(r.compositeViewportUniform, float32(state.width), float32(state.height))
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.Uniform1i(r.compositeTexUniform, 0)
+	gl.Uniform4f(r.compositeRectUniform, 0, 0, float32(state.width), float32(state.height))
 
-	gl.UseProgram(r.colorProgram)
-	gl.BindVertexArray(state.vao)
-	gl.Uniform2f(r.colorViewportUniform, float32(state.width), float32(state.height))
-	if count > 0 {
-		gl.DrawArraysInstanced(gl.TRIANGLES, 0, 6, int32(count))
+	gl.Enable(gl.SCISSOR_TEST)
+	for _, rect := range frame.CompositeRects {
+		scissor := paneScissor(rect, state.height)
+		if scissor.W <= 0 || scissor.H <= 0 {
+			continue
+		}
+		gl.Scissor(int32(scissor.X), int32(scissor.Y), int32(scissor.W), int32(scissor.H))
+		gl.ClearColor(0, 0, 0, 0)
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+		for _, layer := range layers {
+			plan, ok := layerPlans[layer]
+			if !ok {
+				continue
+			}
+			layerState := r.layerStates[layer]
+			if layerState == nil || layerState.texture == 0 {
+				continue
+			}
+			uv := texRect(frame.ViewRect, plan.CacheRect, worldSize)
+			gl.Uniform4f(r.compositeTexRectUniform, uv[0], uv[1], uv[2], uv[3])
+			gl.BindTexture(gl.TEXTURE_2D, layerState.texture)
+			gl.DrawArrays(gl.TRIANGLES, 0, 6)
+		}
+	}
+	gl.Disable(gl.SCISSOR_TEST)
+}
+
+func (r *renderer) ensurePaneState(pane *Pane, width, height int) *paneState {
+	state := r.paneStates[pane]
+	if state == nil {
+		state = &paneState{}
+		gl.GenTextures(1, &state.texture)
+		gl.GenFramebuffers(1, &state.fbo)
+		r.paneStates[pane] = state
+	}
+	if state.width != width || state.height != height {
+		state.width = width
+		state.height = height
+		r.resizePaneTexture(state)
+	}
+	return state
+}
+
+func (r *renderer) resizePaneTexture(state *paneState) {
+	if state.width <= 0 || state.height <= 0 {
+		return
+	}
+	gl.BindTexture(gl.TEXTURE_2D, state.texture)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(state.width), int32(state.height), 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
+
+	gl.BindFramebuffer(gl.FRAMEBUFFER, state.fbo)
+	gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state.texture, 0)
+}
+
+type scissorRect struct {
+	X int
+	Y int
+	W int
+	H int
+}
+
+func bucketScissor(bucket, cacheRect geom.AABB[int], worldSize geom.Vec[int], cacheWidth, cacheHeight int) scissorRect {
+	origin := cacheRect.TopLeft
+	x0 := unwrapCoord(bucket.TopLeft.X, origin.X, worldSize.X)
+	x1 := unwrapCoord(bucket.BottomRight.X, origin.X, worldSize.X)
+	y0 := unwrapCoord(bucket.TopLeft.Y, origin.Y, worldSize.Y)
+	y1 := unwrapCoord(bucket.BottomRight.Y, origin.Y, worldSize.Y)
+	if worldSize.X > 0 && x1 < x0 {
+		x1 += worldSize.X
+	}
+	if worldSize.Y > 0 && y1 < y0 {
+		y1 += worldSize.Y
+	}
+	localX0 := x0 - origin.X
+	localX1 := x1 - origin.X
+	localY0 := y0 - origin.Y
+	localY1 := y1 - origin.Y
+	return scissorRect{
+		X: localX0,
+		Y: cacheHeight - localY1,
+		W: localX1 - localX0,
+		H: localY1 - localY0,
+	}
+}
+
+func paneScissor(rect geom.AABB[int], paneHeight int) scissorRect {
+	return scissorRect{
+		X: rect.TopLeft.X,
+		Y: paneHeight - rect.BottomRight.Y,
+		W: rect.BottomRight.X - rect.TopLeft.X,
+		H: rect.BottomRight.Y - rect.TopLeft.Y,
+	}
+}
+
+func unwrapAABBToCache(aabb geom.AABB[int], cacheOrigin, worldSize geom.Vec[int]) geom.AABB[int] {
+	x0 := unwrapCoord(aabb.TopLeft.X, cacheOrigin.X, worldSize.X)
+	x1 := unwrapCoord(aabb.BottomRight.X, cacheOrigin.X, worldSize.X)
+	y0 := unwrapCoord(aabb.TopLeft.Y, cacheOrigin.Y, worldSize.Y)
+	y1 := unwrapCoord(aabb.BottomRight.Y, cacheOrigin.Y, worldSize.Y)
+	if worldSize.X > 0 && x1 < x0 {
+		x1 += worldSize.X
+	}
+	if worldSize.Y > 0 && y1 < y0 {
+		y1 += worldSize.Y
+	}
+	return geom.NewAABB(geom.NewVec(x0, y0), geom.NewVec(x1, y1))
+}
+
+func unwrapCoord(value, origin, worldSize int) int {
+	if worldSize > 0 && value < origin {
+		return value + worldSize
+	}
+	return value
+}
+
+func texRect(viewRect, cacheRect geom.AABB[int], worldSize geom.Vec[int]) [4]float32 {
+	viewW := viewRect.BottomRight.X - viewRect.TopLeft.X
+	viewH := viewRect.BottomRight.Y - viewRect.TopLeft.Y
+	cacheW := cacheRect.BottomRight.X - cacheRect.TopLeft.X
+	cacheH := cacheRect.BottomRight.Y - cacheRect.TopLeft.Y
+	if cacheW <= 0 || cacheH <= 0 {
+		return [4]float32{0, 0, 1, 1}
+	}
+	offsetX := viewRect.TopLeft.X - cacheRect.TopLeft.X
+	offsetY := viewRect.TopLeft.Y - cacheRect.TopLeft.Y
+	if worldSize.X > 0 && offsetX < 0 {
+		offsetX += worldSize.X
+	}
+	if worldSize.Y > 0 && offsetY < 0 {
+		offsetY += worldSize.Y
+	}
+	return [4]float32{
+		float32(offsetX) / float32(cacheW),
+		float32(offsetY) / float32(cacheH),
+		float32(offsetX+viewW) / float32(cacheW),
+		float32(offsetY+viewH) / float32(cacheH),
 	}
 }
 
 func (r *renderer) ensureLayerState(layer *Layer, width, height int) *layerState {
 	state := r.layerStates[layer]
 	if state == nil {
-		state = &layerState{}
-		gl.GenVertexArrays(1, &state.vao)
-		gl.GenBuffers(1, &state.instanceVbo)
-		r.setupLayerVAO(state)
-
+		state = &layerState{
+			buckets: make(map[uint32]*bucketState),
+		}
 		gl.GenTextures(1, &state.texture)
 		gl.GenFramebuffers(1, &state.fbo)
 		r.layerStates[layer] = state
@@ -241,26 +515,6 @@ func (r *renderer) ensureLayerState(layer *Layer, width, height int) *layerState
 		r.resizeLayerTexture(state)
 	}
 	return state
-}
-
-func (r *renderer) setupLayerVAO(state *layerState) {
-	gl.BindVertexArray(state.vao)
-
-	gl.BindBuffer(gl.ARRAY_BUFFER, r.quadVbo)
-	gl.EnableVertexAttribArray(0)
-	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, 2*4, gl.PtrOffset(0))
-
-	gl.BindBuffer(gl.ARRAY_BUFFER, state.instanceVbo)
-	stride := floatsPerInstance * 4
-	gl.EnableVertexAttribArray(1)
-	gl.VertexAttribPointer(1, 4, gl.FLOAT, false, int32(stride), gl.PtrOffset(0))
-	gl.VertexAttribDivisor(1, 1)
-	gl.EnableVertexAttribArray(2)
-	gl.VertexAttribPointer(2, 4, gl.FLOAT, false, int32(stride), gl.PtrOffset(4*4))
-	gl.VertexAttribDivisor(2, 1)
-	gl.EnableVertexAttribArray(3)
-	gl.VertexAttribPointer(3, 4, gl.FLOAT, false, int32(stride), gl.PtrOffset(8*4))
-	gl.VertexAttribDivisor(3, 1)
 }
 
 func (r *renderer) resizeLayerTexture(state *layerState) {
@@ -275,35 +529,210 @@ func (r *renderer) resizeLayerTexture(state *layerState) {
 	gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state.texture, 0)
 }
 
-func (r *renderer) updateInstanceBufferFull(state *layerState, data []float32) {
-	gl.BindBuffer(gl.ARRAY_BUFFER, state.instanceVbo)
-	required := len(data) * 4
-	if required == 0 {
-		gl.BufferData(gl.ARRAY_BUFFER, 0, nil, gl.DYNAMIC_DRAW)
-		state.instanceCap = 0
+func (r *renderer) syncBucketStates(layer *Layer, manager *grid.BucketGridManager, state *layerState) {
+	if layer == nil || manager == nil || state == nil {
 		return
 	}
-	if required > state.instanceCap {
-		newCap := required
-		if state.instanceCap > 0 {
-			newCap = state.instanceCap * 2
-			if newCap < required {
-				newCap = required
-			}
-		}
-		gl.BufferData(gl.ARRAY_BUFFER, newCap, nil, gl.DYNAMIC_DRAW)
-		state.instanceCap = newCap
+	deltas := manager.ConsumeBucketDeltas()
+	if len(deltas) == 0 {
+		return
 	}
-	gl.BufferSubData(gl.ARRAY_BUFFER, 0, required, gl.Ptr(data))
-}
-
-func (r *renderer) updateInstanceBufferRanges(state *layerState, updates []instanceUpdate) {
-	gl.BindBuffer(gl.ARRAY_BUFFER, state.instanceVbo)
-	for _, update := range updates {
-		if len(update.data) == 0 {
+	scratch := make([]float32, 0, floatsPerInstance)
+	for _, delta := range deltas {
+		bucket := r.ensureBucketState(state, delta.Bucket)
+		if bucket == nil {
 			continue
 		}
-		gl.BufferSubData(gl.ARRAY_BUFFER, update.offset, len(update.data)*4, gl.Ptr(update.data))
+		updates := make([]int, 0, len(delta.Added)+len(delta.Removed)+len(delta.Updated))
+		for _, entryID := range delta.Removed {
+			r.bucketRemoveEntry(bucket, entryID, &updates)
+		}
+		for _, entryID := range delta.Added {
+			scratch = r.bucketAddEntry(layer, manager, bucket, entryID, scratch, &updates)
+		}
+		for _, entryID := range delta.Updated {
+			scratch = r.bucketUpdateEntry(layer, manager, bucket, entryID, scratch, &updates)
+		}
+		required := len(bucket.entries) * floatsPerInstance * 4
+		if r.ensureBucketCapacity(bucket, required) {
+			r.uploadBucketFull(bucket)
+		} else {
+			r.uploadBucketUpdates(bucket, updates)
+		}
+	}
+}
+
+func (r *renderer) ensureBucketState(state *layerState, bucketIndex uint32) *bucketState {
+	if state.buckets == nil {
+		state.buckets = make(map[uint32]*bucketState)
+	}
+	bucket := state.buckets[bucketIndex]
+	if bucket != nil {
+		return bucket
+	}
+	bucket = &bucketState{
+		index: make(map[uint64]int),
+	}
+	gl.GenVertexArrays(1, &bucket.vao)
+	gl.GenBuffers(1, &bucket.instanceVbo)
+	r.setupBucketVAO(bucket)
+	state.buckets[bucketIndex] = bucket
+	return bucket
+}
+
+func (r *renderer) setupBucketVAO(bucket *bucketState) {
+	gl.BindVertexArray(bucket.vao)
+
+	gl.BindBuffer(gl.ARRAY_BUFFER, r.quadVbo)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, 2*4, gl.PtrOffset(0))
+
+	gl.BindBuffer(gl.ARRAY_BUFFER, bucket.instanceVbo)
+	stride := floatsPerInstance * 4
+	gl.EnableVertexAttribArray(1)
+	gl.VertexAttribPointer(1, 4, gl.FLOAT, false, int32(stride), gl.PtrOffset(0))
+	gl.VertexAttribDivisor(1, 1)
+	gl.EnableVertexAttribArray(2)
+	gl.VertexAttribPointer(2, 4, gl.FLOAT, false, int32(stride), gl.PtrOffset(4*4))
+	gl.VertexAttribDivisor(2, 1)
+	gl.EnableVertexAttribArray(3)
+	gl.VertexAttribPointer(3, 4, gl.FLOAT, false, int32(stride), gl.PtrOffset(8*4))
+	gl.VertexAttribDivisor(3, 1)
+}
+
+func (r *renderer) bucketEntryData(layer *Layer, manager *grid.BucketGridManager, entryID uint64, scratch []float32) ([]float32, bool) {
+	frag, ok := manager.EntryAABB(entryID)
+	if !ok {
+		return scratch, false
+	}
+	drawable := layer.DrawableByID(entryID >> 2)
+	if drawable == nil {
+		return scratch, false
+	}
+	scratch = scratch[:0]
+	scratch = appendAABBInstance(scratch, frag, drawable.Style)
+	if len(scratch) != floatsPerInstance {
+		return scratch, false
+	}
+	return scratch, true
+}
+
+func (r *renderer) bucketAddEntry(layer *Layer, manager *grid.BucketGridManager, bucket *bucketState, entryID uint64, scratch []float32, updates *[]int) []float32 {
+	if bucket.index == nil {
+		bucket.index = make(map[uint64]int)
+	}
+	if _, ok := bucket.index[entryID]; ok {
+		return r.bucketUpdateEntry(layer, manager, bucket, entryID, scratch, updates)
+	}
+	data, ok := r.bucketEntryData(layer, manager, entryID, scratch)
+	if !ok {
+		return scratch
+	}
+	idx := len(bucket.entries)
+	bucket.entries = append(bucket.entries, entryID)
+	bucket.index[entryID] = idx
+	start := idx * floatsPerInstance
+	if len(bucket.data) != start {
+		if len(bucket.data) > start {
+			bucket.data = bucket.data[:start]
+		} else {
+			bucket.data = append(bucket.data, make([]float32, start-len(bucket.data))...)
+		}
+	}
+	bucket.data = append(bucket.data, make([]float32, floatsPerInstance)...)
+	copy(bucket.data[start:start+floatsPerInstance], data)
+	*updates = append(*updates, idx)
+	return scratch
+}
+
+func (r *renderer) bucketUpdateEntry(layer *Layer, manager *grid.BucketGridManager, bucket *bucketState, entryID uint64, scratch []float32, updates *[]int) []float32 {
+	idx, ok := bucket.index[entryID]
+	if !ok {
+		return r.bucketAddEntry(layer, manager, bucket, entryID, scratch, updates)
+	}
+	data, ok := r.bucketEntryData(layer, manager, entryID, scratch)
+	if !ok {
+		return scratch
+	}
+	start := idx * floatsPerInstance
+	if start+floatsPerInstance > len(bucket.data) {
+		return scratch
+	}
+	copy(bucket.data[start:start+floatsPerInstance], data)
+	*updates = append(*updates, idx)
+	return scratch
+}
+
+func (r *renderer) bucketRemoveEntry(bucket *bucketState, entryID uint64, updates *[]int) {
+	idx, ok := bucket.index[entryID]
+	if !ok {
+		return
+	}
+	lastIdx := len(bucket.entries) - 1
+	if lastIdx < 0 {
+		return
+	}
+	lastID := bucket.entries[lastIdx]
+	delete(bucket.index, entryID)
+	if idx != lastIdx {
+		bucket.entries[idx] = lastID
+		bucket.index[lastID] = idx
+		start := idx * floatsPerInstance
+		lastStart := lastIdx * floatsPerInstance
+		if lastStart+floatsPerInstance <= len(bucket.data) && start+floatsPerInstance <= len(bucket.data) {
+			copy(bucket.data[start:start+floatsPerInstance], bucket.data[lastStart:lastStart+floatsPerInstance])
+			*updates = append(*updates, idx)
+		}
+	}
+	bucket.entries = bucket.entries[:lastIdx]
+	newLen := lastIdx * floatsPerInstance
+	if newLen < 0 {
+		newLen = 0
+	}
+	if newLen <= len(bucket.data) {
+		bucket.data = bucket.data[:newLen]
+	}
+}
+
+func (r *renderer) ensureBucketCapacity(bucket *bucketState, required int) bool {
+	if required <= 0 {
+		return false
+	}
+	if required <= bucket.instanceCap {
+		return false
+	}
+	newCap := required
+	if bucket.instanceCap > 0 {
+		newCap = bucket.instanceCap * 2
+		if newCap < required {
+			newCap = required
+		}
+	}
+	gl.BindBuffer(gl.ARRAY_BUFFER, bucket.instanceVbo)
+	gl.BufferData(gl.ARRAY_BUFFER, newCap, nil, gl.DYNAMIC_DRAW)
+	bucket.instanceCap = newCap
+	return true
+}
+
+func (r *renderer) uploadBucketFull(bucket *bucketState) {
+	if len(bucket.data) == 0 {
+		return
+	}
+	gl.BindBuffer(gl.ARRAY_BUFFER, bucket.instanceVbo)
+	gl.BufferSubData(gl.ARRAY_BUFFER, 0, len(bucket.data)*4, gl.Ptr(bucket.data))
+}
+
+func (r *renderer) uploadBucketUpdates(bucket *bucketState, updates []int) {
+	if len(updates) == 0 {
+		return
+	}
+	gl.BindBuffer(gl.ARRAY_BUFFER, bucket.instanceVbo)
+	for _, idx := range updates {
+		start := idx * floatsPerInstance
+		if start+floatsPerInstance > len(bucket.data) {
+			continue
+		}
+		gl.BufferSubData(gl.ARRAY_BUFFER, start*4, floatsPerInstance*4, gl.Ptr(bucket.data[start:start+floatsPerInstance]))
 	}
 }
 

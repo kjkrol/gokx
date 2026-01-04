@@ -9,7 +9,9 @@ import (
 
 	"github.com/kjkrol/gokg/pkg/geom"
 	"github.com/kjkrol/gokg/pkg/plane"
+	"github.com/kjkrol/gokg/pkg/spatial"
 	"github.com/kjkrol/gokx/pkg/gfx"
+	"github.com/kjkrol/gokx/pkg/grid"
 )
 
 //go:embed shader.glsl
@@ -17,13 +19,23 @@ var shaderSource string
 
 func main() {
 
+	worldRes := spatial.Size1024x1024
+	viewRes := spatial.Size1024x1024
+
 	config := gfx.WindowConfig{
 		PositionX:   0,
 		PositionY:   0,
-		Width:       800,
-		Height:      800,
+		Width:       int(viewRes.Side()),
+		Height:      int(viewRes.Side()),
 		BorderWidth: 0,
 		Title:       "Sample Window",
+		Grid: gfx.GridConfig{
+			WorldResolution:         worldRes,
+			WorldWrap:               true,
+			CacheMarginBuckets:      0,
+			DefaultBucketResolution: spatial.Size64x64,
+			DefaultBucketCapacity:   16,
+		},
 	}
 
 	window := gfx.NewWindow(config, gfx.RendererConfig{ShaderSource: shaderSource})
@@ -35,9 +47,17 @@ func main() {
 	window.GetDefaultPane().AddLayer(1)
 	window.GetDefaultPane().AddLayer(2)
 
+	layer1 := window.GetDefaultPane().GetLayer(1)
 	layer2 := window.GetDefaultPane().GetLayer(2)
+	if err := layer1.SetGridConfig(grid.LayerConfig{BucketResolution: spatial.Size64x64, BucketCapacity: 16}); err != nil {
+		panic(err)
+	}
+	if err := layer2.SetGridConfig(grid.LayerConfig{BucketResolution: spatial.Size128x128, BucketCapacity: 16}); err != nil {
+		panic(err)
+	}
 
-	torus := plane.NewToroidal2D(800, 800)
+	worldSide := int(worldRes.Side())
+	torus := plane.NewToroidal2D(worldSide, worldSide)
 
 	polygon1Shape := torus.WrapAABB(geom.NewAABBAt(geom.NewVec(50, 50), 50, 50))
 
@@ -59,10 +79,11 @@ func main() {
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	pointDrawables := make([]*gfx.Drawable, 0, 1000)
-	for range 1000 {
-		randX := r.Intn(800)
-		randY := r.Intn(800)
+	numberOfPoints := 100
+	pointDrawables := make([]*gfx.Drawable, 0, numberOfPoints)
+	for range numberOfPoints {
+		randX := r.Intn(worldSide)
+		randY := r.Intn(worldSide)
 		vec := geom.NewVec(randX, randY)
 		planeBox := torus.WrapVec(vec)
 		drawable := &gfx.Drawable{
@@ -70,11 +91,10 @@ func main() {
 			Style: gfx.SpatialStyle{Stroke: color.White},
 		}
 		pointDrawables = append(pointDrawables, drawable)
-		layer2.AddDrawable(drawable)
+		layer1.AddDrawable(drawable)
 	}
 
 	layer2.AddDrawable(polygon1)
-
 	layer2.AddDrawable(polygon2)
 
 	window.Show()
@@ -117,7 +137,7 @@ func main() {
 	ctx := Context{false, window, torus}
 	window.ListenEvents(func(event gfx.Event) {
 		handleEvent(event, &ctx)
-	})
+	}, gfx.DrainAll())
 
 	fmt.Println("Program closed")
 
@@ -175,9 +195,9 @@ func handleEvent(event gfx.Event, ctx *Context) {
 
 func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
-	px, py := pane.WindowToPaneCoords(wX, wY)
+	wx, wy := pane.WindowToWorldCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := geom.NewVec(px, py)
+	vec := geom.NewVec(wx, wy)
 	planeBox := ctx.plane.WrapVec(vec)
 	drawable := &gfx.Drawable{
 		AABB:  planeBox,

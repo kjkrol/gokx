@@ -7,8 +7,10 @@ import (
 
 	"github.com/kjkrol/gokg/pkg/geom"
 	"github.com/kjkrol/gokg/pkg/plane"
+	"github.com/kjkrol/gokg/pkg/spatial"
 	"github.com/kjkrol/gokq/pkg/qtree"
 	"github.com/kjkrol/gokx/pkg/gfx"
+	"github.com/kjkrol/gokx/pkg/grid"
 )
 
 //go:embed shader.glsl
@@ -16,13 +18,23 @@ var shaderSource string
 
 func main() {
 
+	worldRes := spatial.Size2048x2048
+	viewRes := spatial.Size1024x1024
+
 	config := gfx.WindowConfig{
 		PositionX:   0,
 		PositionY:   0,
-		Width:       800,
-		Height:      800,
+		Width:       int(viewRes.Side()),
+		Height:      int(viewRes.Side()),
 		BorderWidth: 0,
 		Title:       "Sample Window",
+		Grid: gfx.GridConfig{
+			WorldResolution:         worldRes,
+			WorldWrap:               true,
+			CacheMarginBuckets:      2,
+			DefaultBucketResolution: spatial.Size64x64,
+			DefaultBucketCapacity:   16,
+		},
 	}
 
 	window := gfx.NewWindow(config, gfx.RendererConfig{ShaderSource: shaderSource})
@@ -35,8 +47,12 @@ func main() {
 	window.GetDefaultPane().AddLayer(2)
 
 	layerTree := window.GetDefaultPane().GetLayer(2)
+	if err := layerTree.SetGridConfig(grid.LayerConfig{BucketResolution: spatial.Size64x64, BucketCapacity: 16}); err != nil {
+		panic(err)
+	}
 
-	plane := plane.NewToroidal2D(800, 800)
+	worldSide := int(worldRes.Side())
+	plane := plane.NewToroidal2D(worldSide, worldSide)
 	qtree := qtree.NewQuadTree(plane)
 	defer qtree.Close()
 
@@ -56,7 +72,7 @@ func main() {
 
 	window.ListenEvents(func(event gfx.Event) {
 		handleEvent(event, &ctx)
-	})
+	}, gfx.DrainAll())
 
 	fmt.Println("Program closed")
 
@@ -135,9 +151,9 @@ func handleEvent(event gfx.Event, ctx *Context) {
 
 func drawDots(wX, wY int, ctx *Context) {
 	pane := ctx.window.GetDefaultPane()
-	px, py := pane.WindowToPaneCoords(wX, wY)
+	px, py := pane.WindowToWorldCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
-	vec := geom.Vec[int]{X: px, Y: py}
+	vec := geom.NewVec(px, py)
 	planeBox := ctx.plane.WrapVec(vec)
 	drawable := &gfx.Drawable{
 		AABB:  planeBox,
