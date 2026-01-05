@@ -444,20 +444,6 @@ func paneScissor(rect geom.AABB[uint32], paneHeight int) scissorRect {
 	}
 }
 
-func unwrapAABBToCache(aabb geom.AABB[uint32], cacheOrigin, worldSize geom.Vec[uint32]) geom.AABB[uint32] {
-	x0 := unwrapCoord(aabb.TopLeft.X, cacheOrigin.X, worldSize.X)
-	x1 := unwrapCoord(aabb.BottomRight.X, cacheOrigin.X, worldSize.X)
-	y0 := unwrapCoord(aabb.TopLeft.Y, cacheOrigin.Y, worldSize.Y)
-	y1 := unwrapCoord(aabb.BottomRight.Y, cacheOrigin.Y, worldSize.Y)
-	if worldSize.X > 0 && x1 < x0 {
-		x1 += worldSize.X
-	}
-	if worldSize.Y > 0 && y1 < y0 {
-		y1 += worldSize.Y
-	}
-	return geom.NewAABB(geom.NewVec(x0, y0), geom.NewVec(x1, y1))
-}
-
 func unwrapCoord(value, origin, worldSize uint32) uint32 {
 	if worldSize > 0 && value < origin {
 		return value + worldSize

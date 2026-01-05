@@ -100,6 +100,12 @@ func (b *Bridge) BuildFrame(pane *gfx.Pane, viewRect spatial.AABB, viewChanged b
 	if manager == nil {
 		return out
 	}
+	for _, layer := range layers {
+		if layer == nil {
+			continue
+		}
+		layer.ProcessOps()
+	}
 	keys := make([]uint64, 0, len(layers))
 	for _, layer := range layers {
 		if layer == nil {

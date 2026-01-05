@@ -12,6 +12,7 @@ type GridLevelConfig struct {
 	Resoltuion       spatial.Resolution
 	BucketResolution spatial.Resolution
 	BucketCapacity   int
+	OpsBufferSize    int
 }
 
 type BucketPlan struct {
@@ -42,9 +43,10 @@ func NewBucketGridManager(space plane.Space2D[uint32], cfg GridLevelConfig) (*Bu
 		return nil, fmt.Errorf("space is required")
 	}
 	index, err := spatial.NewGridIndexManager(space, spatial.GridIndexConfig{
-		WorldResolution:  cfg.Resoltuion,
+		Resolution:       cfg.Resoltuion,
 		BucketResolution: cfg.BucketResolution,
 		BucketCapacity:   cfg.BucketCapacity,
+		OpsBufferSize:    cfg.OpsBufferSize,
 	})
 	if err != nil {
 		return nil, err

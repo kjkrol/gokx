@@ -51,7 +51,11 @@ func main() {
 	layer0 := pane.GetLayer(0)
 	layer1 := pane.GetLayer(1)
 	layer2 := pane.GetLayer(2)
-	if err := bridge.SetLayerConfig(layer1, grid.GridLevelConfig{BucketResolution: spatial.Size64x64, BucketCapacity: 16}); err != nil {
+	if err := bridge.SetLayerConfig(layer1, grid.GridLevelConfig{
+		BucketResolution: spatial.Size64x64,
+		BucketCapacity:   16,
+		OpsBufferSize:    16000,
+	}); err != nil {
 		panic(err)
 	}
 	if err := bridge.SetLayerConfig(layer2, grid.GridLevelConfig{BucketResolution: spatial.Size128x128, BucketCapacity: 16}); err != nil {
@@ -98,7 +102,7 @@ func main() {
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	numberOfPoints := 1
+	numberOfPoints := 10000
 	pointDrawables := make([]*gfx.Drawable, 0, numberOfPoints)
 	for range numberOfPoints {
 		randX := uint32(r.Intn(worldSide))
