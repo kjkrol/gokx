@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package gfx
+package renderer
 
 import (
 	"syscall/js"

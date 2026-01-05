@@ -1,4 +1,4 @@
-package gfx
+package renderer
 
 // RendererConfig describes GPU shader inputs provided by the caller.
 // ShaderSource must be a single-source shader that supports:

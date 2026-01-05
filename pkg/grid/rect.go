@@ -1,23 +1,45 @@
 package grid
 
-import "github.com/kjkrol/gokg/pkg/geom"
+import (
+	"github.com/kjkrol/gokg/pkg/geom"
+	"github.com/kjkrol/gokg/pkg/spatial"
+)
 
-func cacheRectForView(viewRect geom.AABB[int], bucketSize, marginBuckets, worldSize int) geom.AABB[int] {
-	if bucketSize <= 0 {
+func cacheRectForView(viewRect spatial.AABB, bucketSize uint32, marginBuckets int, worldSize uint32) spatial.AABB {
+	if bucketSize == 0 {
 		return viewRect
 	}
-	margin := marginBuckets * bucketSize
-	minX := alignDown(viewRect.TopLeft.X, bucketSize) - margin
-	minY := alignDown(viewRect.TopLeft.Y, bucketSize) - margin
-	maxX := alignUp(viewRect.BottomRight.X, bucketSize) + margin
-	maxY := alignUp(viewRect.BottomRight.Y, bucketSize) + margin
+	margin := bucketSize * uint32(marginBuckets)
+	minX := alignDown(viewRect.TopLeft.X, bucketSize)
+	minY := alignDown(viewRect.TopLeft.Y, bucketSize)
+	maxX := alignUp(viewRect.BottomRight.X, bucketSize)
+	maxY := alignUp(viewRect.BottomRight.Y, bucketSize)
+	if margin != 0 {
+		if worldSize == 0 {
+			if minX > margin {
+				minX -= margin
+			} else {
+				minX = 0
+			}
+			if minY > margin {
+				minY -= margin
+			} else {
+				minY = 0
+			}
+		} else {
+			minX -= margin
+			minY -= margin
+		}
+		maxX += margin
+		maxY += margin
+	}
 	width := maxX - minX
 	height := maxY - minY
 	originX := minX
 	originY := minY
 	if worldSize > 0 {
-		originX = wrapInt(originX, worldSize)
-		originY = wrapInt(originY, worldSize)
+		originX = wrapUint(originX, worldSize)
+		originY = wrapUint(originY, worldSize)
 	}
 	return geom.NewAABB(
 		geom.NewVec(originX, originY),
@@ -25,22 +47,22 @@ func cacheRectForView(viewRect geom.AABB[int], bucketSize, marginBuckets, worldS
 	)
 }
 
-func rectEquals(a, b geom.AABB[int]) bool {
+func rectEquals(a, b spatial.AABB) bool {
 	return a.TopLeft == b.TopLeft && a.BottomRight == b.BottomRight
 }
 
-func diffRects(oldRect, newRect geom.AABB[int]) []geom.AABB[int] {
+func diffRects(oldRect, newRect spatial.AABB) []spatial.AABB {
 	if rectEmpty(newRect) {
 		return nil
 	}
 	if rectEmpty(oldRect) {
-		return []geom.AABB[int]{newRect}
+		return []spatial.AABB{newRect}
 	}
-	inter, ok := rectIntersect(oldRect, newRect)
+	inter, ok := geom.IntersectStrict(oldRect, newRect)
 	if !ok {
-		return []geom.AABB[int]{newRect}
+		return []spatial.AABB{newRect}
 	}
-	out := make([]geom.AABB[int], 0, 4)
+	out := make([]spatial.AABB, 0, 4)
 	top := geom.NewAABB(geom.NewVec(newRect.TopLeft.X, newRect.TopLeft.Y), geom.NewVec(newRect.BottomRight.X, inter.TopLeft.Y))
 	if !rectEmpty(top) {
 		out = append(out, top)
@@ -60,70 +82,36 @@ func diffRects(oldRect, newRect geom.AABB[int]) []geom.AABB[int] {
 	return out
 }
 
-func rectIntersect(a, b geom.AABB[int]) (geom.AABB[int], bool) {
-	minX := max(a.TopLeft.X, b.TopLeft.X)
-	minY := max(a.TopLeft.Y, b.TopLeft.Y)
-	maxX := min(a.BottomRight.X, b.BottomRight.X)
-	maxY := min(a.BottomRight.Y, b.BottomRight.Y)
-	if maxX <= minX || maxY <= minY {
-		return geom.AABB[int]{}, false
-	}
-	return geom.NewAABB(geom.NewVec(minX, minY), geom.NewVec(maxX, maxY)), true
-}
-
-func rectEmpty(aabb geom.AABB[int]) bool {
+func rectEmpty(aabb spatial.AABB) bool {
 	return aabb.BottomRight.X <= aabb.TopLeft.X || aabb.BottomRight.Y <= aabb.TopLeft.Y
 }
 
-func alignDown(value, step int) int {
-	return divFloor(value, step) * step
+func rectIntersectsAny(rect spatial.AABB, others []geom.AABB[uint32]) bool {
+	for _, other := range others {
+		if _, ok := geom.IntersectStrict(rect, other); ok {
+			return true
+		}
+	}
+	return false
 }
 
-func alignUp(value, step int) int {
-	return divCeil(value, step) * step
-}
-
-func divFloor(a, b int) int {
-	if b <= 0 {
+func alignDown(value, step uint32) uint32 {
+	if step == 0 {
 		return 0
 	}
-	if a >= 0 {
-		return a / b
-	}
-	return -(((-a) + b - 1) / b)
+	return (value / step) * step
 }
 
-func divCeil(a, b int) int {
-	if b <= 0 {
+func alignUp(value, step uint32) uint32 {
+	if step == 0 {
 		return 0
 	}
-	if a >= 0 {
-		return (a + b - 1) / b
-	}
-	return -((-a) / b)
+	return ((value + step - 1) / step) * step
 }
 
-func wrapInt(val, size int) int {
-	if size <= 0 {
+func wrapUint(val, size uint32) uint32 {
+	if size == 0 {
 		return val
 	}
-	mod := val % size
-	if mod < 0 {
-		mod += size
-	}
-	return mod
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	return val % size
 }

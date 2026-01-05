@@ -12,12 +12,12 @@ type SpatialStyle struct {
 }
 
 type Drawable struct {
-	plane.AABB[int]
+	plane.AABB[uint32]
 	Style SpatialStyle
 	layer *Layer
 }
 
-func (d *Drawable) Update(mutator func(shape *plane.AABB[int])) {
+func (d *Drawable) Update(mutator func(shape *plane.AABB[uint32])) {
 	if d == nil || mutator == nil {
 		return
 	}

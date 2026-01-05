@@ -7,9 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokx/internal/platform"
-	"github.com/kjkrol/gokx/pkg/grid"
 )
 
 type WindowConfig struct {
@@ -19,7 +17,7 @@ type WindowConfig struct {
 	Height      int
 	BorderWidth int
 	Title       string
-	Grid        GridConfig
+	World       WorldConfig
 }
 
 func (w WindowConfig) convert() platform.WindowConfig {
@@ -28,8 +26,7 @@ func (w WindowConfig) convert() platform.WindowConfig {
 
 type Window struct {
 	platformWinWrapper platform.PlatformWindowWrapper
-	rendererConfig     RendererConfig
-	renderer           *renderer
+	renderer           Renderer
 	defaultPane        *Pane
 	panes              map[string]*Pane
 	rerfreshing        bool
@@ -40,24 +37,18 @@ type Window struct {
 	ctx                context.Context
 	cancel             context.CancelFunc
 
-	updates chan func()
-
-	gridManagers map[*Pane]*grid.MultiBucketGridManager
+	updates       chan func()
+	layerObserver LayerObserver
 }
 
 const maxEventWait = 50 * time.Millisecond
 
-func NewWindow(conf WindowConfig, renderer RendererConfig) *Window {
-	if renderer.ShaderSource == "" {
-		panic("renderer shader source is required")
-	}
+func NewWindow(conf WindowConfig, factory RendererFactory) *Window {
 	platformConfig := conf.convert()
 	window := Window{
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
 		updates:            make(chan func(), 1024),
-		rendererConfig:     renderer,
-		gridManagers:       make(map[*Pane]*grid.MultiBucketGridManager),
 		width:              conf.Width,
 		height:             conf.Height,
 	}
@@ -70,11 +61,15 @@ func NewWindow(conf WindowConfig, renderer RendererConfig) *Window {
 			Height:  conf.Height,
 			OffsetX: 0,
 			OffsetY: 0,
-			Grid:    conf.Grid,
+			World:   conf.World,
 		},
 	)
-	window.ensureGridForPane(window.defaultPane)
-	window.renderer = newRenderer(window.platformWinWrapper, renderer)
+	if window.layerObserver != nil {
+		window.defaultPane.SetLayerObserver(window.layerObserver)
+	}
+	if factory != nil {
+		window.renderer = factory(&window)
+	}
 	window.ctx, window.cancel = context.WithCancel(context.Background())
 	window.rerfreshing = false
 	return &window
@@ -82,8 +77,10 @@ func NewWindow(conf WindowConfig, renderer RendererConfig) *Window {
 
 func (w *Window) AddPane(name string, conf *PaneConfig) *Pane {
 	pane := newPane(conf)
+	if w.layerObserver != nil {
+		pane.SetLayerObserver(w.layerObserver)
+	}
 	w.panes[name] = pane
-	w.ensureGridForPane(pane)
 	return pane
 }
 
@@ -93,6 +90,17 @@ func (w *Window) GetDefaultPane() *Pane {
 
 func (w *Window) GetPaneByName(name string) *Pane {
 	return w.panes[name]
+}
+
+func (w *Window) Panes() []*Pane {
+	return w.panesSnapshot()
+}
+
+func (w *Window) Size() (int, int) {
+	if w == nil {
+		return 0, 0
+	}
+	return w.width, w.height
 }
 
 func (w *Window) Show() {
@@ -123,9 +131,25 @@ func (w *Window) Close() {
 		pane.Close()
 	}
 	w.panes = nil
-	w.gridManagers = nil
 	w.platformWinWrapper.Close()
 
+}
+
+func (w *Window) SetRenderer(renderer Renderer) {
+	if w == nil {
+		return
+	}
+	if w.renderer != nil {
+		w.renderer.Close()
+	}
+	w.renderer = renderer
+}
+
+func (w *Window) GLContext() any {
+	if w == nil || w.platformWinWrapper == nil {
+		return nil
+	}
+	return w.platformWinWrapper.GLContext()
 }
 
 func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsConsumerStrategy) {
@@ -214,59 +238,17 @@ func (w *Window) panesSnapshot() []*Pane {
 	return out
 }
 
-func (w *Window) gridForPane(pane *Pane) *grid.MultiBucketGridManager {
+func (w *Window) SetLayerObserver(observer LayerObserver) {
 	if w == nil {
-		return nil
-	}
-	return w.gridManagers[pane]
-}
-
-func (w *Window) ensureGridForPane(pane *Pane) {
-	if w == nil || pane == nil || pane.Config == nil {
 		return
 	}
-	if _, ok := w.gridManagers[pane]; ok {
-		return
+	w.layerObserver = observer
+	if w.defaultPane != nil {
+		w.defaultPane.SetLayerObserver(observer)
 	}
-	gridConf := normalizeGridConfig(pane.Config.Grid, pane.Config.Width, pane.Config.Height)
-	pane.Config.Grid = gridConf
-	worldSide := int(gridConf.WorldResolution.Side())
-	var space plane.Space2D[int]
-	if gridConf.WorldWrap {
-		space = plane.NewToroidal2D(worldSide, worldSide)
-	} else {
-		space = plane.NewEuclidean2D(worldSide, worldSide)
-	}
-	manager := grid.NewMultiBucketGridManager(
-		space,
-		gridConf.WorldResolution,
-		gridConf.CacheMarginBuckets,
-		gridConf.DefaultBucketResolution,
-		gridConf.DefaultBucketCapacity,
-	)
-	w.gridManagers[pane] = manager
-	pane.setLayerObserver(func(layer *Layer) {
-		w.registerLayer(manager, pane, layer)
-	})
-	for _, layer := range pane.Layers() {
-		w.registerLayer(manager, pane, layer)
-	}
-}
-
-func (w *Window) registerLayer(manager *grid.MultiBucketGridManager, pane *Pane, layer *Layer) {
-	if manager == nil || pane == nil || layer == nil {
-		return
-	}
-	cfg := layer.gridConfig
-	if !layer.gridConfigSet {
-		cfg = grid.LayerConfig{
-			BucketResolution: pane.Config.Grid.DefaultBucketResolution,
-			BucketCapacity:   pane.Config.Grid.DefaultBucketCapacity,
+	for _, pane := range w.panes {
+		if pane != nil {
+			pane.SetLayerObserver(observer)
 		}
 	}
-	gridMgr, err := manager.Register(layer, cfg)
-	if err != nil {
-		panic(err)
-	}
-	layer.attachGridManager(manager, gridMgr)
 }

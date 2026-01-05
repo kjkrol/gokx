@@ -8,31 +8,31 @@ import (
 	"github.com/kjkrol/gokg/pkg/spatial"
 )
 
-type LayerPlan struct {
-	Key any
+type GridLevelPlan struct {
+	Key uint64
 	BucketPlan
 }
 
 type FramePlan struct {
-	ViewRect       geom.AABB[int]
+	ViewRect       spatial.AABB
 	ViewChanged    bool
-	Layers         []LayerPlan
-	CompositeRects []geom.AABB[int]
+	GridLevels     []GridLevelPlan
+	CompositeRects []spatial.AABB
 }
 
 type MultiBucketGridManager struct {
 	mu                      sync.RWMutex
-	space                   plane.Space2D[int]
-	worldResolution         spatial.Resolution
+	space                   plane.Space2D[uint32]
+	resoltuion              spatial.Resolution
 	defaultBucketResolution spatial.Resolution
 	defaultBucketCapacity   int
 	marginBuckets           int
-	managers                map[any]*BucketGridManager
+	managers                map[uint64]*BucketGridManager
 }
 
 func NewMultiBucketGridManager(
-	space plane.Space2D[int],
-	worldResolution spatial.Resolution,
+	space plane.Space2D[uint32],
+	resoltuion spatial.Resolution,
 	marginBuckets int,
 	defaultBucketResolution spatial.Resolution,
 	defaultBucketCapacity int,
@@ -48,17 +48,17 @@ func NewMultiBucketGridManager(
 	}
 	return &MultiBucketGridManager{
 		space:                   space,
-		worldResolution:         worldResolution,
+		resoltuion:              resoltuion,
 		defaultBucketResolution: defaultBucketResolution,
 		defaultBucketCapacity:   defaultBucketCapacity,
 		marginBuckets:           marginBuckets,
-		managers:                make(map[any]*BucketGridManager),
+		managers:                make(map[uint64]*BucketGridManager),
 	}
 }
 
-func (m *MultiBucketGridManager) Register(key any, cfg LayerConfig) (*BucketGridManager, error) {
-	if cfg.WorldResolution == 0 {
-		cfg.WorldResolution = m.worldResolution
+func (m *MultiBucketGridManager) Register(key uint64, cfg GridLevelConfig) (*BucketGridManager, error) {
+	if cfg.Resoltuion == 0 {
+		cfg.Resoltuion = m.resoltuion
 	}
 	if cfg.BucketResolution == 0 {
 		cfg.BucketResolution = m.defaultBucketResolution
@@ -76,7 +76,7 @@ func (m *MultiBucketGridManager) Register(key any, cfg LayerConfig) (*BucketGrid
 	return manager, nil
 }
 
-func (m *MultiBucketGridManager) Manager(key any) *BucketGridManager {
+func (m *MultiBucketGridManager) Manager(key uint64) *BucketGridManager {
 	m.mu.RLock()
 	manager := m.managers[key]
 	m.mu.RUnlock()
@@ -87,22 +87,22 @@ func (m *MultiBucketGridManager) MarginBuckets() int {
 	return m.marginBuckets
 }
 
-func (m *MultiBucketGridManager) BuildFrame(viewRect geom.AABB[int], viewChanged bool, keys []any) FramePlan {
-	layers := make([]LayerPlan, 0, len(keys))
+func (m *MultiBucketGridManager) BuildFrame(viewRect spatial.AABB, viewChanged bool, keys []uint64) FramePlan {
+	gridLevels := make([]GridLevelPlan, 0, len(keys))
 	for _, key := range keys {
 		manager := m.Manager(key)
 		if manager == nil {
 			continue
 		}
 		plan := manager.Plan(viewRect, m.marginBuckets)
-		layers = append(layers, LayerPlan{Key: key, BucketPlan: plan})
+		gridLevels = append(gridLevels, GridLevelPlan{Key: key, BucketPlan: plan})
 	}
 
-	composite := make([]geom.AABB[int], 0, 16)
+	composite := make([]spatial.AABB, 0, 16)
 	if viewChanged {
 		viewSize := rectSize(viewRect)
 		if viewSize.X > 0 && viewSize.Y > 0 {
-			composite = append(composite, geom.NewAABBAt(geom.NewVec(0, 0), viewSize.X, viewSize.Y))
+			composite = append(composite, geom.NewAABBAt(geom.NewVec[uint32](0, 0), viewSize.X, viewSize.Y))
 		}
 	} else {
 		viewOrigin := viewRect.TopLeft
@@ -113,8 +113,8 @@ func (m *MultiBucketGridManager) BuildFrame(viewRect geom.AABB[int], viewChanged
 				worldSide = 0
 			}
 		}
-		for _, layer := range layers {
-			for _, bucket := range layer.Buckets {
+		for _, gridLevel := range gridLevels {
+			for _, bucket := range gridLevel.Buckets {
 				clipped, ok := intersectWithView(m.space, bucket, viewRect)
 				if !ok {
 					continue
@@ -131,50 +131,50 @@ func (m *MultiBucketGridManager) BuildFrame(viewRect geom.AABB[int], viewChanged
 	return FramePlan{
 		ViewRect:       viewRect,
 		ViewChanged:    viewChanged,
-		Layers:         layers,
+		GridLevels:     gridLevels,
 		CompositeRects: composite,
 	}
 }
 
-func rectSize(rect geom.AABB[int]) geom.Vec[int] {
+func rectSize(rect spatial.AABB) geom.Vec[uint32] {
 	return geom.NewVec(rect.BottomRight.X-rect.TopLeft.X, rect.BottomRight.Y-rect.TopLeft.Y)
 }
 
-func (m *MultiBucketGridManager) worldSideForView() int {
+func (m *MultiBucketGridManager) worldSideForView() uint32 {
 	if m.space == nil {
 		return 0
 	}
 	if m.space.Name() != "Toroidal2D" {
 		return 0
 	}
-	return int(m.worldResolution.Side())
+	return m.resoltuion.Side()
 }
 
-func intersectWithView(space plane.Space2D[int], bucket, viewRect geom.AABB[int]) (geom.AABB[int], bool) {
+func intersectWithView(space plane.Space2D[uint32], bucket, viewRect spatial.AABB) (spatial.AABB, bool) {
 	if space == nil {
-		return rectIntersect(bucket, viewRect)
+		return geom.IntersectStrict(bucket, viewRect)
 	}
 	wrapped := wrapViewRect(space, viewRect)
 	for _, frag := range wrapped {
-		if inter, ok := rectIntersect(bucket, frag); ok {
+		if inter, ok := geom.IntersectStrict(bucket, frag); ok {
 			return inter, true
 		}
 	}
-	return geom.AABB[int]{}, false
+	return spatial.AABB{}, false
 }
 
-func wrapViewRect(space plane.Space2D[int], viewRect geom.AABB[int]) []geom.AABB[int] {
+func wrapViewRect(space plane.Space2D[uint32], viewRect spatial.AABB) []spatial.AABB {
 	wrapped := space.WrapAABB(viewRect)
-	out := make([]geom.AABB[int], 0, 4)
+	out := make([]spatial.AABB, 0, 4)
 	out = append(out, wrapped.AABB)
-	wrapped.VisitFragments(func(_ plane.FragPosition, frag geom.AABB[int]) bool {
+	wrapped.VisitFragments(func(_ plane.FragPosition, frag geom.AABB[uint32]) bool {
 		out = append(out, frag)
 		return true
 	})
 	return out
 }
 
-func toViewRect(rect geom.AABB[int], viewOrigin geom.Vec[int], worldSide int) geom.AABB[int] {
+func toViewRect(rect spatial.AABB, viewOrigin geom.Vec[uint32], worldSide uint32) spatial.AABB {
 	x0 := mapCoord(rect.TopLeft.X, viewOrigin.X, worldSide)
 	y0 := mapCoord(rect.TopLeft.Y, viewOrigin.Y, worldSide)
 	x1 := mapCoord(rect.BottomRight.X, viewOrigin.X, worldSide)
@@ -182,13 +182,15 @@ func toViewRect(rect geom.AABB[int], viewOrigin geom.Vec[int], worldSide int) ge
 	return geom.NewAABB(geom.NewVec(x0, y0), geom.NewVec(x1, y1))
 }
 
-func mapCoord(value, origin, worldSide int) int {
-	if worldSide <= 0 {
+func mapCoord(value, origin, worldSide uint32) uint32 {
+	if worldSide == 0 {
+		if value >= origin {
+			return value - origin
+		}
+		return 0
+	}
+	if value >= origin {
 		return value - origin
 	}
-	delta := value - origin
-	if delta < 0 {
-		delta += worldSide
-	}
-	return delta
+	return value + worldSide - origin
 }

@@ -9,8 +9,10 @@ import (
 	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokg/pkg/spatial"
 	"github.com/kjkrol/gokq/pkg/qtree"
+	"github.com/kjkrol/gokx/internal/renderer"
 	"github.com/kjkrol/gokx/pkg/gfx"
 	"github.com/kjkrol/gokx/pkg/grid"
+	"github.com/kjkrol/gokx/pkg/gridbridge"
 )
 
 //go:embed shader.glsl
@@ -28,30 +30,46 @@ func main() {
 		Height:      int(viewRes.Side()),
 		BorderWidth: 0,
 		Title:       "Sample Window",
-		Grid: gfx.GridConfig{
-			WorldResolution:         worldRes,
-			WorldWrap:               true,
-			CacheMarginBuckets:      2,
-			DefaultBucketResolution: spatial.Size64x64,
-			DefaultBucketCapacity:   16,
+		World: gfx.WorldConfig{
+			WorldResolution: worldRes,
+			WorldWrap:       true,
 		},
 	}
 
-	window := gfx.NewWindow(config, gfx.RendererConfig{ShaderSource: shaderSource})
+	bridge := gridbridge.NewBridge()
+	window := gfx.NewWindow(config, renderer.NewRendererFactory(renderer.RendererConfig{ShaderSource: shaderSource}, bridge))
 	defer window.Close()
 
-	layer0 := window.GetDefaultPane().GetLayer(0)
-	layer0.SetBackground(color.RGBA{255, 0, 0, 255})
+	pane := window.GetDefaultPane()
+	if pane == nil {
+		panic("default pane is required")
+	}
+	pane.AddLayer(1)
+	pane.AddLayer(2)
 
-	window.GetDefaultPane().AddLayer(1)
-	window.GetDefaultPane().AddLayer(2)
-
-	layerTree := window.GetDefaultPane().GetLayer(2)
-	if err := layerTree.SetGridConfig(grid.LayerConfig{BucketResolution: spatial.Size64x64, BucketCapacity: 16}); err != nil {
+	layer0 := pane.GetLayer(0)
+	layerTree := pane.GetLayer(2)
+	if err := bridge.SetLayerConfig(layerTree, grid.GridLevelConfig{BucketResolution: spatial.Size64x64, BucketCapacity: 16}); err != nil {
 		panic(err)
 	}
 
-	worldSide := int(worldRes.Side())
+	var space plane.Space2D[uint32]
+	if config.World.WorldWrap {
+		space = plane.NewToroidal2D(worldRes.Side(), worldRes.Side())
+	} else {
+		space = plane.NewEuclidean2D(worldRes.Side(), worldRes.Side())
+	}
+	manager := grid.NewMultiBucketGridManager(
+		space,
+		worldRes,
+		2,
+		spatial.Size64x64,
+		16,
+	)
+	bridge.AttachPane(pane, manager)
+	layer0.SetBackground(color.RGBA{255, 0, 0, 255})
+
+	worldSide := worldRes.Side()
 	plane := plane.NewToroidal2D(worldSide, worldSide)
 	qtree := qtree.NewQuadTree(plane)
 	defer qtree.Close()
@@ -81,23 +99,23 @@ func main() {
 type Context struct {
 	lmbPressed     bool
 	window         *gfx.Window
-	plane          plane.Space2D[int]
-	quadTree       *qtree.QuadTree[int]
+	plane          plane.Space2D[uint32]
+	quadTree       *qtree.QuadTree[uint32]
 	quadTreeLayer  *gfx.Layer
 	quadTreeFrames []*gfx.Drawable
 	counter        int
 }
 
 type quadTreeItem struct {
-	shape geom.AABB[int]
+	shape geom.AABB[uint32]
 	id    int
 }
 
-func (qt *quadTreeItem) Bound() geom.AABB[int] {
+func (qt *quadTreeItem) Bound() geom.AABB[uint32] {
 	return qt.shape
 }
 
-func (qt quadTreeItem) SameID(other qtree.Item[int]) bool {
+func (qt quadTreeItem) SameID(other qtree.Item[uint32]) bool {
 	o, ok := other.(*quadTreeItem)
 	if !ok {
 		return false

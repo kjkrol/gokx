@@ -1,6 +1,6 @@
 //go:build !js
 
-package gfx
+package renderer
 
 import (
 	"fmt"
@@ -8,8 +8,7 @@ import (
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"github.com/kjkrol/gokg/pkg/geom"
-	"github.com/kjkrol/gokx/internal/platform"
-	"github.com/kjkrol/gokx/pkg/grid"
+	"github.com/kjkrol/gokx/pkg/gfx"
 )
 
 type renderer struct {
@@ -29,9 +28,10 @@ type renderer struct {
 	compositeTexUniform      int32
 	compositeTexRectUniform  int32
 
-	layerStates map[*Layer]*layerState
-	paneViews   map[*Pane]uint64
-	paneStates  map[*Pane]*paneState
+	layerStates map[*gfx.Layer]*layerState
+	paneViews   map[*gfx.Pane]uint64
+	paneStates  map[*gfx.Pane]*paneState
+	source      gfx.FrameSource
 }
 
 type layerState struct {
@@ -39,7 +39,7 @@ type layerState struct {
 	fbo     uint32
 	width   int
 	height  int
-	buckets map[uint32]*bucketState
+	buckets map[geom.AABB[uint32]]*bucketState
 }
 
 type bucketState struct {
@@ -58,34 +58,38 @@ type paneState struct {
 	height  int
 }
 
-func newRenderer(_ platform.PlatformWindowWrapper, conf RendererConfig) *renderer {
+func newRenderer(_ *gfx.Window, conf RendererConfig, source gfx.FrameSource) *renderer {
 	return &renderer{
 		shaderSource: conf.ShaderSource,
-		layerStates:  make(map[*Layer]*layerState),
-		paneViews:    make(map[*Pane]uint64),
-		paneStates:   make(map[*Pane]*paneState),
+		layerStates:  make(map[*gfx.Layer]*layerState),
+		paneViews:    make(map[*gfx.Pane]uint64),
+		paneStates:   make(map[*gfx.Pane]*paneState),
+		source:       source,
 	}
 }
 
-func (r *renderer) Render(w *Window) {
-	if w == nil || w.defaultPane == nil || w.defaultPane.Config == nil {
+func (r *renderer) Render(w *gfx.Window) {
+	if w == nil || r.source == nil {
+		return
+	}
+	defaultPane := w.GetDefaultPane()
+	if defaultPane == nil || defaultPane.Config == nil {
 		return
 	}
 	r.ensureInit()
 
-	width := w.width
-	height := w.height
+	width, height := w.Size()
 	if width <= 0 || height <= 0 {
 		return
 	}
 
-	panes := w.panesSnapshot()
+	panes := w.Panes()
 	type paneFrame struct {
-		pane       *Pane
-		layers     []*Layer
-		plan       grid.FramePlan
-		layerPlans map[*Layer]grid.LayerPlan
-		worldSize  geom.Vec[int]
+		pane       *gfx.Pane
+		layers     []*gfx.Layer
+		plan       gfx.FramePlan
+		layerPlans map[*gfx.Layer]gfx.LayerPlan
+		worldSize  geom.Vec[uint32]
 	}
 	paneFrames := make([]paneFrame, 0, len(panes))
 
@@ -97,34 +101,25 @@ func (r *renderer) Render(w *Window) {
 		if view == nil {
 			continue
 		}
-		manager := w.gridForPane(pane)
-		if manager == nil {
-			continue
-		}
 		layers := pane.Layers()
-		keys := make([]any, 0, len(layers))
-		for _, layer := range layers {
-			keys = append(keys, layer)
-		}
 		viewVersion := view.Version()
 		prevVersion, ok := r.paneViews[pane]
 		viewChanged := !ok || prevVersion != viewVersion
 		if viewChanged {
 			r.paneViews[pane] = viewVersion
 		}
-		frame := manager.BuildFrame(view.Rect(), viewChanged, keys)
-		layerPlans := make(map[*Layer]grid.LayerPlan, len(frame.Layers))
+		frame := r.source.BuildFrame(pane, view.Rect(), viewChanged, layers)
+		layerPlans := make(map[*gfx.Layer]gfx.LayerPlan, len(frame.Layers))
 		for _, layerPlan := range frame.Layers {
-			layer, ok := layerPlan.Key.(*Layer)
-			if !ok || layer == nil {
+			if layerPlan.Layer == nil {
 				continue
 			}
-			layerPlans[layer] = layerPlan
+			layerPlans[layerPlan.Layer] = layerPlan
 		}
 		worldSize := view.WorldSize()
 		viewSize := view.Size()
 		if !view.Wrap() || viewSize.X >= worldSize.X || viewSize.Y >= worldSize.Y {
-			worldSize = geom.NewVec(0, 0)
+			worldSize = geom.NewVec[uint32](0, 0)
 		}
 		for _, layer := range layers {
 			plan, ok := layerPlans[layer]
@@ -282,22 +277,21 @@ func (r *renderer) initQuad() {
 	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, 2*4, gl.PtrOffset(0))
 }
 
-func (r *renderer) renderLayerBuckets(layer *Layer, plan grid.LayerPlan, worldSize geom.Vec[int]) {
-	if layer == nil {
-		return
-	}
-	manager := layer.GridManager()
-	if manager == nil {
+func (r *renderer) renderLayerBuckets(layer *gfx.Layer, plan gfx.LayerPlan, worldSize geom.Vec[uint32]) {
+	if layer == nil || r.source == nil {
 		return
 	}
 	cacheRect := plan.CacheRect
-	cacheWidth := cacheRect.BottomRight.X - cacheRect.TopLeft.X
-	cacheHeight := cacheRect.BottomRight.Y - cacheRect.TopLeft.Y
+	if cacheRect.BottomRight.X <= cacheRect.TopLeft.X || cacheRect.BottomRight.Y <= cacheRect.TopLeft.Y {
+		return
+	}
+	cacheWidth := int(cacheRect.BottomRight.X - cacheRect.TopLeft.X)
+	cacheHeight := int(cacheRect.BottomRight.Y - cacheRect.TopLeft.Y)
 	if cacheWidth <= 0 || cacheHeight <= 0 {
 		return
 	}
 	state := r.ensureLayerState(layer, cacheWidth, cacheHeight)
-	r.syncBucketStates(layer, manager, state)
+	r.syncBucketStates(layer, state)
 	if len(plan.Buckets) == 0 {
 		return
 	}
@@ -320,11 +314,7 @@ func (r *renderer) renderLayerBuckets(layer *Layer, plan grid.LayerPlan, worldSi
 		gl.ClearColor(bgColor[0], bgColor[1], bgColor[2], bgColor[3])
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
-		bucketIdx, ok := manager.BucketIndex(bucket)
-		if !ok {
-			continue
-		}
-		bucketState := state.buckets[bucketIdx]
+		bucketState := state.buckets[bucket]
 		if bucketState == nil || len(bucketState.entries) == 0 {
 			continue
 		}
@@ -335,7 +325,7 @@ func (r *renderer) renderLayerBuckets(layer *Layer, plan grid.LayerPlan, worldSi
 	gl.Disable(gl.SCISSOR_TEST)
 }
 
-func (r *renderer) compositePane(pane *Pane, layers []*Layer, layerPlans map[*Layer]grid.LayerPlan, frame grid.FramePlan, worldSize geom.Vec[int]) {
+func (r *renderer) compositePane(pane *gfx.Pane, layers []*gfx.Layer, layerPlans map[*gfx.Layer]gfx.LayerPlan, frame gfx.FramePlan, worldSize geom.Vec[uint32]) {
 	if pane == nil || pane.Config == nil {
 		return
 	}
@@ -383,7 +373,7 @@ func (r *renderer) compositePane(pane *Pane, layers []*Layer, layerPlans map[*La
 	gl.Disable(gl.SCISSOR_TEST)
 }
 
-func (r *renderer) ensurePaneState(pane *Pane, width, height int) *paneState {
+func (r *renderer) ensurePaneState(pane *gfx.Pane, width, height int) *paneState {
 	state := r.paneStates[pane]
 	if state == nil {
 		state = &paneState{}
@@ -421,7 +411,7 @@ type scissorRect struct {
 	H int
 }
 
-func bucketScissor(bucket, cacheRect geom.AABB[int], worldSize geom.Vec[int], cacheWidth, cacheHeight int) scissorRect {
+func bucketScissor(bucket, cacheRect geom.AABB[uint32], worldSize geom.Vec[uint32], cacheWidth, cacheHeight int) scissorRect {
 	origin := cacheRect.TopLeft
 	x0 := unwrapCoord(bucket.TopLeft.X, origin.X, worldSize.X)
 	x1 := unwrapCoord(bucket.BottomRight.X, origin.X, worldSize.X)
@@ -433,10 +423,10 @@ func bucketScissor(bucket, cacheRect geom.AABB[int], worldSize geom.Vec[int], ca
 	if worldSize.Y > 0 && y1 < y0 {
 		y1 += worldSize.Y
 	}
-	localX0 := x0 - origin.X
-	localX1 := x1 - origin.X
-	localY0 := y0 - origin.Y
-	localY1 := y1 - origin.Y
+	localX0 := int(x0 - origin.X)
+	localX1 := int(x1 - origin.X)
+	localY0 := int(y0 - origin.Y)
+	localY1 := int(y1 - origin.Y)
 	return scissorRect{
 		X: localX0,
 		Y: cacheHeight - localY1,
@@ -445,16 +435,16 @@ func bucketScissor(bucket, cacheRect geom.AABB[int], worldSize geom.Vec[int], ca
 	}
 }
 
-func paneScissor(rect geom.AABB[int], paneHeight int) scissorRect {
+func paneScissor(rect geom.AABB[uint32], paneHeight int) scissorRect {
 	return scissorRect{
-		X: rect.TopLeft.X,
-		Y: paneHeight - rect.BottomRight.Y,
-		W: rect.BottomRight.X - rect.TopLeft.X,
-		H: rect.BottomRight.Y - rect.TopLeft.Y,
+		X: int(rect.TopLeft.X),
+		Y: paneHeight - int(rect.BottomRight.Y),
+		W: int(rect.BottomRight.X - rect.TopLeft.X),
+		H: int(rect.BottomRight.Y - rect.TopLeft.Y),
 	}
 }
 
-func unwrapAABBToCache(aabb geom.AABB[int], cacheOrigin, worldSize geom.Vec[int]) geom.AABB[int] {
+func unwrapAABBToCache(aabb geom.AABB[uint32], cacheOrigin, worldSize geom.Vec[uint32]) geom.AABB[uint32] {
 	x0 := unwrapCoord(aabb.TopLeft.X, cacheOrigin.X, worldSize.X)
 	x1 := unwrapCoord(aabb.BottomRight.X, cacheOrigin.X, worldSize.X)
 	y0 := unwrapCoord(aabb.TopLeft.Y, cacheOrigin.Y, worldSize.Y)
@@ -468,28 +458,32 @@ func unwrapAABBToCache(aabb geom.AABB[int], cacheOrigin, worldSize geom.Vec[int]
 	return geom.NewAABB(geom.NewVec(x0, y0), geom.NewVec(x1, y1))
 }
 
-func unwrapCoord(value, origin, worldSize int) int {
+func unwrapCoord(value, origin, worldSize uint32) uint32 {
 	if worldSize > 0 && value < origin {
 		return value + worldSize
 	}
 	return value
 }
 
-func texRect(viewRect, cacheRect geom.AABB[int], worldSize geom.Vec[int]) [4]float32 {
+func texRect(viewRect, cacheRect geom.AABB[uint32], worldSize geom.Vec[uint32]) [4]float32 {
 	viewW := viewRect.BottomRight.X - viewRect.TopLeft.X
 	viewH := viewRect.BottomRight.Y - viewRect.TopLeft.Y
 	cacheW := cacheRect.BottomRight.X - cacheRect.TopLeft.X
 	cacheH := cacheRect.BottomRight.Y - cacheRect.TopLeft.Y
-	if cacheW <= 0 || cacheH <= 0 {
+	if cacheW == 0 || cacheH == 0 {
 		return [4]float32{0, 0, 1, 1}
 	}
-	offsetX := viewRect.TopLeft.X - cacheRect.TopLeft.X
-	offsetY := viewRect.TopLeft.Y - cacheRect.TopLeft.Y
-	if worldSize.X > 0 && offsetX < 0 {
-		offsetX += worldSize.X
+	offsetX := viewRect.TopLeft.X
+	offsetY := viewRect.TopLeft.Y
+	if viewRect.TopLeft.X >= cacheRect.TopLeft.X {
+		offsetX = viewRect.TopLeft.X - cacheRect.TopLeft.X
+	} else if worldSize.X > 0 {
+		offsetX = viewRect.TopLeft.X + worldSize.X - cacheRect.TopLeft.X
 	}
-	if worldSize.Y > 0 && offsetY < 0 {
-		offsetY += worldSize.Y
+	if viewRect.TopLeft.Y >= cacheRect.TopLeft.Y {
+		offsetY = viewRect.TopLeft.Y - cacheRect.TopLeft.Y
+	} else if worldSize.Y > 0 {
+		offsetY = viewRect.TopLeft.Y + worldSize.Y - cacheRect.TopLeft.Y
 	}
 	return [4]float32{
 		float32(offsetX) / float32(cacheW),
@@ -499,11 +493,11 @@ func texRect(viewRect, cacheRect geom.AABB[int], worldSize geom.Vec[int]) [4]flo
 	}
 }
 
-func (r *renderer) ensureLayerState(layer *Layer, width, height int) *layerState {
+func (r *renderer) ensureLayerState(layer *gfx.Layer, width, height int) *layerState {
 	state := r.layerStates[layer]
 	if state == nil {
 		state = &layerState{
-			buckets: make(map[uint32]*bucketState),
+			buckets: make(map[geom.AABB[uint32]]*bucketState),
 		}
 		gl.GenTextures(1, &state.texture)
 		gl.GenFramebuffers(1, &state.fbo)
@@ -529,11 +523,11 @@ func (r *renderer) resizeLayerTexture(state *layerState) {
 	gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state.texture, 0)
 }
 
-func (r *renderer) syncBucketStates(layer *Layer, manager *grid.BucketGridManager, state *layerState) {
-	if layer == nil || manager == nil || state == nil {
+func (r *renderer) syncBucketStates(layer *gfx.Layer, state *layerState) {
+	if layer == nil || r.source == nil || state == nil {
 		return
 	}
-	deltas := manager.ConsumeBucketDeltas()
+	deltas := r.source.ConsumeBucketDeltas(layer)
 	if len(deltas) == 0 {
 		return
 	}
@@ -548,10 +542,10 @@ func (r *renderer) syncBucketStates(layer *Layer, manager *grid.BucketGridManage
 			r.bucketRemoveEntry(bucket, entryID, &updates)
 		}
 		for _, entryID := range delta.Added {
-			scratch = r.bucketAddEntry(layer, manager, bucket, entryID, scratch, &updates)
+			scratch = r.bucketAddEntry(layer, bucket, entryID, scratch, &updates)
 		}
 		for _, entryID := range delta.Updated {
-			scratch = r.bucketUpdateEntry(layer, manager, bucket, entryID, scratch, &updates)
+			scratch = r.bucketUpdateEntry(layer, bucket, entryID, scratch, &updates)
 		}
 		required := len(bucket.entries) * floatsPerInstance * 4
 		if r.ensureBucketCapacity(bucket, required) {
@@ -562,11 +556,11 @@ func (r *renderer) syncBucketStates(layer *Layer, manager *grid.BucketGridManage
 	}
 }
 
-func (r *renderer) ensureBucketState(state *layerState, bucketIndex uint32) *bucketState {
+func (r *renderer) ensureBucketState(state *layerState, bucketRect geom.AABB[uint32]) *bucketState {
 	if state.buckets == nil {
-		state.buckets = make(map[uint32]*bucketState)
+		state.buckets = make(map[geom.AABB[uint32]]*bucketState)
 	}
-	bucket := state.buckets[bucketIndex]
+	bucket := state.buckets[bucketRect]
 	if bucket != nil {
 		return bucket
 	}
@@ -576,7 +570,7 @@ func (r *renderer) ensureBucketState(state *layerState, bucketIndex uint32) *buc
 	gl.GenVertexArrays(1, &bucket.vao)
 	gl.GenBuffers(1, &bucket.instanceVbo)
 	r.setupBucketVAO(bucket)
-	state.buckets[bucketIndex] = bucket
+	state.buckets[bucketRect] = bucket
 	return bucket
 }
 
@@ -600,8 +594,11 @@ func (r *renderer) setupBucketVAO(bucket *bucketState) {
 	gl.VertexAttribDivisor(3, 1)
 }
 
-func (r *renderer) bucketEntryData(layer *Layer, manager *grid.BucketGridManager, entryID uint64, scratch []float32) ([]float32, bool) {
-	frag, ok := manager.EntryAABB(entryID)
+func (r *renderer) bucketEntryData(layer *gfx.Layer, entryID uint64, scratch []float32) ([]float32, bool) {
+	if layer == nil || r.source == nil {
+		return scratch, false
+	}
+	frag, ok := r.source.EntryAABB(layer, entryID)
 	if !ok {
 		return scratch, false
 	}
@@ -617,14 +614,14 @@ func (r *renderer) bucketEntryData(layer *Layer, manager *grid.BucketGridManager
 	return scratch, true
 }
 
-func (r *renderer) bucketAddEntry(layer *Layer, manager *grid.BucketGridManager, bucket *bucketState, entryID uint64, scratch []float32, updates *[]int) []float32 {
+func (r *renderer) bucketAddEntry(layer *gfx.Layer, bucket *bucketState, entryID uint64, scratch []float32, updates *[]int) []float32 {
 	if bucket.index == nil {
 		bucket.index = make(map[uint64]int)
 	}
 	if _, ok := bucket.index[entryID]; ok {
-		return r.bucketUpdateEntry(layer, manager, bucket, entryID, scratch, updates)
+		return r.bucketUpdateEntry(layer, bucket, entryID, scratch, updates)
 	}
-	data, ok := r.bucketEntryData(layer, manager, entryID, scratch)
+	data, ok := r.bucketEntryData(layer, entryID, scratch)
 	if !ok {
 		return scratch
 	}
@@ -645,12 +642,12 @@ func (r *renderer) bucketAddEntry(layer *Layer, manager *grid.BucketGridManager,
 	return scratch
 }
 
-func (r *renderer) bucketUpdateEntry(layer *Layer, manager *grid.BucketGridManager, bucket *bucketState, entryID uint64, scratch []float32, updates *[]int) []float32 {
+func (r *renderer) bucketUpdateEntry(layer *gfx.Layer, bucket *bucketState, entryID uint64, scratch []float32, updates *[]int) []float32 {
 	idx, ok := bucket.index[entryID]
 	if !ok {
-		return r.bucketAddEntry(layer, manager, bucket, entryID, scratch, updates)
+		return r.bucketAddEntry(layer, bucket, entryID, scratch, updates)
 	}
-	data, ok := r.bucketEntryData(layer, manager, entryID, scratch)
+	data, ok := r.bucketEntryData(layer, entryID, scratch)
 	if !ok {
 		return scratch
 	}

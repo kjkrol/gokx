@@ -1,34 +1,15 @@
-package gfx
+package renderer
 
 import (
 	"image/color"
 
 	"github.com/kjkrol/gokg/pkg/geom"
-	"github.com/kjkrol/gokg/pkg/plane"
+	"github.com/kjkrol/gokx/pkg/gfx"
 )
 
 const floatsPerInstance = 12
 
-type instanceRange struct {
-	start int
-	count int
-}
-
-type instanceUpdate struct {
-	offset int
-	data   []float32
-}
-
-func appendInstanceData(dst []float32, shape plane.AABB[uint32], style SpatialStyle) []float32 {
-	dst = appendAABBInstance(dst, shape.AABB, style)
-	shape.VisitFragments(func(pos plane.FragPosition, aabb geom.AABB[uint32]) bool {
-		dst = appendAABBInstance(dst, aabb, style)
-		return true
-	})
-	return dst
-}
-
-func appendAABBInstance(dst []float32, aabb geom.AABB[uint32], style SpatialStyle) []float32 {
+func appendAABBInstance(dst []float32, aabb geom.AABB[uint32], style gfx.SpatialStyle) []float32 {
 	minX := aabb.TopLeft.X
 	minY := aabb.TopLeft.Y
 	maxX := aabb.BottomRight.X

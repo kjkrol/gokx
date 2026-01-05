@@ -24,7 +24,7 @@ The project is intended as a foundation for experimenting with graphics, input e
 
 ## Quick Example
 
-`gfx.NewWindow` requires a shader source string (single-source shader with stage/pass defines).
+`internal/renderer.NewRendererFactory` expects a single-source shader (stage/pass defines) and returns a renderer factory for `gfx.NewWindow`.
 See `cmd/main.go` and `cmd/shader.glsl` for a complete example.
 
 ```go
@@ -33,19 +33,35 @@ package main
 import (
 	_ "embed"
 
+	"github.com/kjkrol/gokg/pkg/plane"
+	"github.com/kjkrol/gokg/pkg/spatial"
+	"github.com/kjkrol/gokx/internal/renderer"
 	"github.com/kjkrol/gokx/pkg/gfx"
+	"github.com/kjkrol/gokx/pkg/grid"
+	"github.com/kjkrol/gokx/pkg/gridbridge"
 )
 
 //go:embed shader.glsl
 var shaderSource string
 
 func main() {
+	worldRes := spatial.Size1024x1024
+	bridge := gridbridge.NewBridge()
 	win := gfx.NewWindow(gfx.WindowConfig{
 		Width:  800,
 		Height: 600,
 		Title:  "GOKX Demo",
-	}, gfx.RendererConfig{ShaderSource: shaderSource})
+		World: gfx.WorldConfig{
+			WorldResolution: worldRes,
+			WorldWrap:       true,
+		},
+	}, renderer.NewRendererFactory(renderer.RendererConfig{ShaderSource: shaderSource}, bridge))
 	defer win.Close()
+
+	pane := win.GetDefaultPane()
+	space := plane.NewToroidal2D(int(worldRes.Side()), int(worldRes.Side()))
+	manager := grid.NewMultiBucketGridManager(space, worldRes, 2, spatial.Size64x64, 16)
+	bridge.AttachPane(pane, manager)
 
 	win.Show()
 	win.RefreshRate(60)

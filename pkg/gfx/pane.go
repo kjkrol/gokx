@@ -4,38 +4,41 @@ import (
 	"sync"
 
 	"github.com/kjkrol/gokg/pkg/geom"
-	"github.com/kjkrol/gokx/pkg/grid"
 )
 
 type PaneConfig struct {
 	Width, Height    int
 	OffsetX, OffsetY int
-	Grid             GridConfig
+	World            WorldConfig
 }
 
 type Pane struct {
-	Config *PaneConfig
-	layers []*Layer
-	viewport       *grid.Viewport
+	Config         *PaneConfig
+	layers         []*Layer
+	viewport       *Viewport
 	onLayerCreated func(*Layer)
+	layerObserver  LayerObserver
 	mu             sync.Mutex
 }
 
 func newPane(conf *PaneConfig) *Pane {
 	layers := make([]*Layer, 1)
-	conf.Grid = normalizeGridConfig(conf.Grid, conf.Width, conf.Height)
-	worldSide := int(conf.Grid.WorldResolution.Side())
+	conf.World = normalizeWorldConfig(conf.World, conf.Width, conf.Height)
+	worldSide := conf.World.WorldResolution.Side()
 	pane := Pane{
 		Config: conf,
 		layers: layers,
 	}
-	pane.viewport = grid.NewViewport(
+	pane.viewport = NewViewport(
 		geom.NewVec(worldSide, worldSide),
-		geom.NewVec(conf.Width, conf.Height),
-		conf.Grid.WorldWrap,
+		geom.NewVec(uint32(conf.Width), uint32(conf.Height)),
+		conf.World.WorldWrap,
 	)
 	layer := NewLayerDefault(&pane)
 	layer.idx = 0
+	if pane.layerObserver != nil {
+		layer.SetObserver(pane.layerObserver)
+	}
 	layers[0] = layer
 	return &pane
 }
@@ -46,6 +49,9 @@ func (p *Pane) AddLayer(num int) bool {
 	}
 	layer := NewLayerDefault(p)
 	layer.idx = len(p.layers)
+	if p.layerObserver != nil {
+		layer.SetObserver(p.layerObserver)
+	}
 
 	p.mu.Lock()
 	p.layers = append(p.layers, layer)
@@ -89,37 +95,51 @@ func (p *Pane) WindowToPaneCoords(x, y int) (int, int) {
 	return x - p.Config.OffsetX, y - p.Config.OffsetY
 }
 
-func (p *Pane) WindowToWorldCoords(x, y int) (int, int) {
+func (p *Pane) WindowToWorldCoords(x, y int) (uint32, uint32) {
 	px, py := p.WindowToPaneCoords(x, y)
 	if p.viewport == nil {
-		return px, py
+		return clampIntToUint(px), clampIntToUint(py)
 	}
 	origin := p.viewport.Origin()
-	wx := px + origin.X
-	wy := py + origin.Y
+	wx := clampIntToUint(px) + origin.X
+	wy := clampIntToUint(py) + origin.Y
 	if p.viewport.Wrap() {
 		world := p.viewport.WorldSize()
-		wx = wrapInt(wx, world.X)
-		wy = wrapInt(wy, world.Y)
+		wx = wrapUint(wx, world.X)
+		wy = wrapUint(wy, world.Y)
 	}
 	return wx, wy
 }
 
-func (p *Pane) Viewport() *grid.Viewport {
+func (p *Pane) Viewport() *Viewport {
 	return p.viewport
 }
 
-func (p *Pane) setLayerObserver(fn func(*Layer)) {
+func (p *Pane) SetLayerObserver(observer LayerObserver) {
+	p.layerObserver = observer
+	p.mu.Lock()
+	for _, layer := range p.layers {
+		if layer != nil {
+			layer.SetObserver(observer)
+		}
+	}
+	p.mu.Unlock()
+}
+
+func (p *Pane) SetLayerCreatedHandler(fn func(*Layer)) {
 	p.onLayerCreated = fn
 }
 
-func wrapInt(val, size int) int {
-	if size <= 0 {
+func wrapUint(val, size uint32) uint32 {
+	if size == 0 {
 		return val
 	}
-	mod := val % size
-	if mod < 0 {
-		mod += size
+	return val % size
+}
+
+func clampIntToUint(val int) uint32 {
+	if val <= 0 {
+		return 0
 	}
-	return mod
+	return uint32(val)
 }
