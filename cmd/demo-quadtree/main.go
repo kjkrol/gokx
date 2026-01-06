@@ -38,6 +38,7 @@ func main() {
 
 	bridge := gridbridge.NewBridge()
 	window := gfx.NewWindow(config, renderer.NewRendererFactory(renderer.RendererConfig{ShaderSource: shaderSource}, bridge))
+	window.SetDrawableEventsApplier(bridge)
 	defer window.Close()
 
 	pane := window.GetDefaultPane()

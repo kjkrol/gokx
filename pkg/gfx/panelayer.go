@@ -82,6 +82,10 @@ func (l *Layer) GetPane() *Pane {
 	return l.pane
 }
 
+func (l *Layer) ID() uint64 {
+	return uint64(l.idx)
+}
+
 func (l *Layer) Background() color.Color {
 	l.mu.RLock()
 	bg := l.background
@@ -420,66 +424,6 @@ func (l *Layer) appendDrawableLocked(drawable *Drawable) {
 	}
 }
 
-func (l *Layer) consumeInstances(force bool) (fullData []float32, updates []instanceUpdate, count int, bg color.Color, dirty bool) {
-	l.ProcessOps()
-	l.mu.Lock()
-	if !l.needsRedraw && !force {
-		bg = l.background
-		count = l.instanceCount
-		l.mu.Unlock()
-		return nil, nil, count, bg, false
-	}
-	if force || l.fullRebuild || l.ranges == nil {
-		l.instanceData = l.instanceData[:0]
-		l.instanceCount = 0
-		if l.ranges == nil {
-			l.ranges = make(map[*Drawable]instanceRange, len(l.drawables))
-		} else {
-			for key := range l.ranges {
-				delete(l.ranges, key)
-			}
-		}
-		for _, drawable := range l.drawables {
-			if drawable == nil {
-				continue
-			}
-			data := appendInstanceData(nil, drawable.AABB, drawable.Style)
-			start := len(l.instanceData)
-			l.instanceData = append(l.instanceData, data...)
-			instCount := len(data) / floatsPerInstance
-			l.ranges[drawable] = instanceRange{start: start, count: instCount}
-			l.instanceCount += instCount
-		}
-		fullData = append([]float32(nil), l.instanceData...)
-		count = l.instanceCount
-		bg = l.background
-		l.fullRebuild = false
-		l.pending = nil
-		l.needsRedraw = false
-		l.mu.Unlock()
-		return fullData, nil, count, bg, true
-	}
-
-	if len(l.pending) > 0 {
-		updates = append([]instanceUpdate(nil), l.pending...)
-	}
-	count = l.instanceCount
-	bg = l.background
-	l.pending = nil
-	l.needsRedraw = false
-	l.mu.Unlock()
-	return nil, updates, count, bg, true
-}
-
-func (l *Layer) snapshotInstances() (data []float32, count int) {
-	l.ProcessOps()
-	l.mu.RLock()
-	data = append([]float32(nil), l.instanceData...)
-	count = l.instanceCount
-	l.mu.RUnlock()
-	return data, count
-}
-
 func (l *Layer) SetObserver(observer LayerObserver) {
 	l.mu.Lock()
 	l.observer = observer
@@ -500,13 +444,6 @@ func (l *Layer) DrawableByID(id uint64) *Drawable {
 	return drawable
 }
 
-func (l *Layer) ensureDrawableID(drawable *Drawable) uint64 {
-	l.mu.Lock()
-	id := l.ensureDrawableIDLocked(drawable)
-	l.mu.Unlock()
-	return id
-}
-
 func (l *Layer) ensureDrawableIDLocked(drawable *Drawable) uint64 {
 	if drawable == nil {
 		return 0
@@ -520,8 +457,11 @@ func (l *Layer) ensureDrawableIDLocked(drawable *Drawable) uint64 {
 	if id := l.idByDrawable[drawable]; id != 0 {
 		return id
 	}
-	l.idSeq++
-	id := l.idSeq
+	id := drawable.ID
+	if id == 0 {
+		id = NextDrawableID()
+		drawable.ID = id
+	}
 	l.idByDrawable[drawable] = id
 	l.drawableByID[id] = drawable
 	return id

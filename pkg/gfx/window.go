@@ -37,8 +37,11 @@ type Window struct {
 	ctx                context.Context
 	cancel             context.CancelFunc
 
-	updates       chan func()
-	layerObserver LayerObserver
+	updates         chan func()
+	internalEvents  chan Event
+	layerObserver   LayerObserver
+	nextPaneID      uint64
+	drawableApplier DrawableEventsApplier
 }
 
 const maxEventWait = 50 * time.Millisecond
@@ -49,6 +52,7 @@ func NewWindow(conf WindowConfig, factory RendererFactory) *Window {
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
 		updates:            make(chan func(), 1024),
+		internalEvents:     make(chan Event, 1024),
 		width:              conf.Width,
 		height:             conf.Height,
 	}
@@ -63,6 +67,7 @@ func NewWindow(conf WindowConfig, factory RendererFactory) *Window {
 			OffsetY: 0,
 			World:   conf.World,
 		},
+		0,
 	)
 	if window.layerObserver != nil {
 		window.defaultPane.SetLayerObserver(window.layerObserver)
@@ -72,11 +77,13 @@ func NewWindow(conf WindowConfig, factory RendererFactory) *Window {
 	}
 	window.ctx, window.cancel = context.WithCancel(context.Background())
 	window.rerfreshing = false
+	window.nextPaneID = 1
 	return &window
 }
 
 func (w *Window) AddPane(name string, conf *PaneConfig) *Pane {
-	pane := newPane(conf)
+	pane := newPane(conf, w.nextPaneID)
+	w.nextPaneID++
 	if w.layerObserver != nil {
 		pane.SetLayerObserver(w.layerObserver)
 	}
@@ -152,6 +159,32 @@ func (w *Window) GLContext() any {
 	return w.platformWinWrapper.GLContext()
 }
 
+// EmitEvent injects an event into the window loop (used by simulation).
+func (w *Window) EmitEvent(event Event) {
+	if w == nil || event == nil {
+		return
+	}
+	select {
+	case w.internalEvents <- event:
+	default:
+		// drop if buffer full to avoid blocking producer
+	}
+}
+
+func (w *Window) Context() context.Context {
+	if w == nil {
+		return nil
+	}
+	return w.ctx
+}
+
+func (w *Window) SetDrawableEventsApplier(applier DrawableEventsApplier) {
+	if w == nil {
+		return
+	}
+	w.drawableApplier = applier
+}
+
 func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsConsumerStrategy) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -163,7 +196,20 @@ func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsCons
 	if strategy == nil {
 		strategy = DrainAll()
 	}
+
+	dispatch := func(event Event) {
+		w.applyDrawableEvent(event)
+		if handleEvent != nil {
+			handleEvent(event)
+		}
+	}
+
 	poll := func(timeoutMs int) (Event, bool) {
+		select {
+		case ev := <-w.internalEvents:
+			return ev, true
+		default:
+		}
 		platformEvent := w.platformWinWrapper.NextEventTimeout(timeoutMs)
 		if _, ok := platformEvent.(platform.TimeoutEvent); ok {
 			return nil, false
@@ -193,7 +239,7 @@ func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsCons
 				timeoutMs = 1
 			}
 
-			strategy.Consume(poll, handleEvent, timeoutMs)
+			strategy.Consume(poll, dispatch, timeoutMs)
 
 			// sprawdź czy czas na render
 			now = time.Now()
@@ -209,6 +255,11 @@ func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsCons
 				}
 			doneUpdates:
 
+				w.processLayerOps()
+				if w.drawableApplier != nil {
+					w.drawableApplier.FlushTouched()
+				}
+
 				w.platformWinWrapper.BeginFrame()
 				if w.renderer != nil {
 					w.renderer.Render(w)
@@ -218,10 +269,6 @@ func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsCons
 			}
 		}
 	}
-}
-
-func (w *Window) StartAnimation(animation *Animation) {
-	animation.Run(w.ctx, 0, &w.wg, w.updates)
 }
 
 func (w *Window) panesSnapshot() []*Pane {
@@ -249,6 +296,52 @@ func (w *Window) SetLayerObserver(observer LayerObserver) {
 	for _, pane := range w.panes {
 		if pane != nil {
 			pane.SetLayerObserver(observer)
+		}
+	}
+}
+
+func (w *Window) applyDrawableEvent(event Event) {
+	applier := w.drawableApplier
+	if applier == nil {
+		return
+	}
+	switch e := event.(type) {
+	case DrawableSetAdded:
+		applier.ApplyAdded(e.Items)
+	case DrawableSetRemoved:
+		applier.ApplyRemoved(e.Items)
+	case DrawableSetTranslated:
+		applier.ApplyTranslated(e.Items)
+	}
+}
+
+func (w *Window) processLayerOps() {
+	if w == nil {
+		return
+	}
+	if w.defaultPane != nil {
+		w.defaultPane.mu.Lock()
+		layers := make([]*Layer, len(w.defaultPane.layers))
+		copy(layers, w.defaultPane.layers)
+		w.defaultPane.mu.Unlock()
+		for _, layer := range layers {
+			if layer != nil {
+				layer.ProcessOps()
+			}
+		}
+	}
+	for _, pane := range w.panes {
+		if pane == nil {
+			continue
+		}
+		pane.mu.Lock()
+		layers := make([]*Layer, len(pane.layers))
+		copy(layers, pane.layers)
+		pane.mu.Unlock()
+		for _, layer := range layers {
+			if layer != nil {
+				layer.ProcessOps()
+			}
 		}
 	}
 }

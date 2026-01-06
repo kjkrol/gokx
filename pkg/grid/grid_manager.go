@@ -103,7 +103,6 @@ func (m *BucketGridManager) QueueDirtyRect(rect spatial.AABB) {
 }
 
 func (m *BucketGridManager) Plan(viewRect spatial.AABB, marginBuckets int) BucketPlan {
-	m.Flush()
 	worldSide := m.cacheWorldSide
 	if worldSide > 0 {
 		viewW := viewRect.BottomRight.X - viewRect.TopLeft.X

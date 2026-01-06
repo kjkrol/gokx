@@ -14,6 +14,7 @@ import (
 	"github.com/kjkrol/gokx/pkg/gfx"
 	"github.com/kjkrol/gokx/pkg/grid"
 	"github.com/kjkrol/gokx/pkg/gridbridge"
+	"github.com/kjkrol/gokx/pkg/sim"
 )
 
 //go:embed shader.glsl
@@ -39,6 +40,7 @@ func main() {
 
 	bridge := gridbridge.NewBridge()
 	window := gfx.NewWindow(config, renderer.NewRendererFactory(renderer.RendererConfig{ShaderSource: shaderSource}, bridge))
+	window.SetDrawableEventsApplier(bridge)
 	defer window.Close()
 
 	pane := window.GetDefaultPane()
@@ -85,6 +87,7 @@ func main() {
 	polygon1Shape := torus.WrapAABB(geom.NewAABBAt(geom.NewVec[uint32](50, 50), 50, 50))
 
 	polygon1 := &gfx.Drawable{
+		ID:   gfx.NextDrawableID(),
 		AABB: polygon1Shape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
@@ -94,6 +97,7 @@ func main() {
 
 	rectShape := torus.WrapAABB(geom.NewAABBAt(geom.NewVec[uint32](150, 150), 100, 100))
 	polygon2 := &gfx.Drawable{
+		ID:   gfx.NextDrawableID(),
 		AABB: rectShape,
 		Style: gfx.SpatialStyle{
 			Fill:   color.RGBA{0, 255, 0, 255},
@@ -110,6 +114,7 @@ func main() {
 		vec := geom.NewVec(randX, randY)
 		planeBox := torus.WrapVec(vec)
 		drawable := &gfx.Drawable{
+			ID:    gfx.NextDrawableID(),
 			AABB:  planeBox,
 			Style: gfx.SpatialStyle{Stroke: color.White},
 		}
@@ -123,35 +128,56 @@ func main() {
 	window.Show()
 
 	// ------- Animations -------------------
+	simulation := sim.New(50*time.Millisecond, func() (gfx.DrawableSetAdded, gfx.DrawableSetRemoved, gfx.DrawableSetTranslated) {
+		var translated []gfx.DrawableTranslate
 
-	drawables := make([]*gfx.Drawable, 0, len(pointDrawables)+2)
-	drawables = append(drawables, pointDrawables...)
-	drawables = append(drawables, polygon1, polygon2)
+		// move polygon1
+		oldPoly1 := polygon1.AABB
+		polygon1.Update(func(shape *plane.AABB[uint32]) {
+			torus.Translate(shape, signedVec(1, 1))
+		})
+		translated = append(translated, gfx.DrawableTranslate{
+			PaneID:     pane.IDValue(),
+			LayerID:    layer2.ID(),
+			DrawableID: polygon1.ID,
+			Old:        oldPoly1,
+			New:        polygon1.AABB,
+		})
 
-	animation := gfx.NewAnimation(
-		layer2,
-		50*time.Millisecond,
-		drawables,
-		func() {
-			polygon1.Update(func(shape *plane.AABB[uint32]) {
-				torus.Translate(shape, signedVec(1, 1))
+		// move polygon2
+		oldPoly2 := polygon2.AABB
+		polygon2.Update(func(shape *plane.AABB[uint32]) {
+			torus.Translate(shape, signedVec(0, -1))
+		})
+		translated = append(translated, gfx.DrawableTranslate{
+			PaneID:     pane.IDValue(),
+			LayerID:    layer2.ID(),
+			DrawableID: polygon2.ID,
+			Old:        oldPoly2,
+			New:        polygon2.AABB,
+		})
+
+		for _, drawable := range pointDrawables {
+			dx := r.Intn(5) - 2
+			dy := r.Intn(5) - 2
+			old := drawable.AABB
+			drawable.Update(func(shape *plane.AABB[uint32]) {
+				torus.Translate(shape, signedVec(dx, dy))
 			})
-			polygon2.Update(func(shape *plane.AABB[uint32]) {
-				torus.Translate(shape, signedVec(0, -1))
+			translated = append(translated, gfx.DrawableTranslate{
+				PaneID:     pane.IDValue(),
+				LayerID:    layer1.ID(),
+				DrawableID: drawable.ID,
+				Old:        old,
+				New:        drawable.AABB,
 			})
+		}
 
-			for _, drawable := range pointDrawables {
-				dx := r.Intn(5) - 2
-				dy := r.Intn(5) - 2
-				drawable.Update(func(shape *plane.AABB[uint32]) {
-					torus.Translate(shape, signedVec(dx, dy))
-
-				})
-			}
-		},
-	)
-
-	window.StartAnimation(animation)
+		return gfx.DrawableSetAdded{}, gfx.DrawableSetRemoved{}, gfx.DrawableSetTranslated{Items: translated}
+	})
+	simulation.Run(window.Context(), func(event gfx.Event) {
+		window.EmitEvent(event)
+	})
 
 	// --------------------------------------
 
@@ -223,6 +249,7 @@ func drawDots(wX, wY int, ctx *Context) {
 	vec := geom.NewVec(wx, wy)
 	planeBox := ctx.plane.WrapVec(vec)
 	drawable := &gfx.Drawable{
+		ID:    gfx.NextDrawableID(),
 		AABB:  planeBox,
 		Style: gfx.SpatialStyle{Stroke: color.White},
 	}

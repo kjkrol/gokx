@@ -12,6 +12,7 @@ type SpatialStyle struct {
 }
 
 type Drawable struct {
+	ID uint64
 	plane.AABB[uint32]
 	Style SpatialStyle
 	layer *Layer

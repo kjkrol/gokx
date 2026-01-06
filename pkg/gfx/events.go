@@ -1,6 +1,9 @@
 package gfx
 
-import "github.com/kjkrol/gokx/internal/platform"
+import (
+	"github.com/kjkrol/gokg/pkg/plane"
+	"github.com/kjkrol/gokx/internal/platform"
+)
 
 type Event interface{}
 
@@ -35,6 +38,47 @@ type MouseWheel struct {
 	X, Y   int
 }
 type UnexpectedEvent struct{}
+
+type DrawableAdd struct {
+	PaneID     uint64
+	LayerID    uint64
+	DrawableID uint64
+	AABB       plane.AABB[uint32]
+}
+
+type DrawableRemove struct {
+	PaneID     uint64
+	LayerID    uint64
+	DrawableID uint64
+}
+
+type DrawableTranslate struct {
+	PaneID     uint64
+	LayerID    uint64
+	DrawableID uint64
+	Old        plane.AABB[uint32]
+	New        plane.AABB[uint32]
+}
+
+type DrawableSetAdded struct {
+	Items []DrawableAdd
+}
+
+type DrawableSetRemoved struct {
+	Items []DrawableRemove
+}
+
+type DrawableSetTranslated struct {
+	Items []DrawableTranslate
+}
+
+// DrawableEventsApplier consumes bulk drawable events and flushes pending changes.
+type DrawableEventsApplier interface {
+	ApplyAdded(items []DrawableAdd)
+	ApplyRemoved(items []DrawableRemove)
+	ApplyTranslated(items []DrawableTranslate)
+	FlushTouched()
+}
 
 func convert(event platform.Event) Event {
 	switch e := event.(type) {

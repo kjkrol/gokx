@@ -13,6 +13,7 @@ type PaneConfig struct {
 }
 
 type Pane struct {
+	ID             uint64
 	Config         *PaneConfig
 	layers         []*Layer
 	viewport       *Viewport
@@ -21,11 +22,12 @@ type Pane struct {
 	mu             sync.Mutex
 }
 
-func newPane(conf *PaneConfig) *Pane {
+func newPane(conf *PaneConfig, id uint64) *Pane {
 	layers := make([]*Layer, 1)
 	conf.World = normalizeWorldConfig(conf.World, conf.Width, conf.Height)
 	worldSide := conf.World.WorldResolution.Side()
 	pane := Pane{
+		ID:     id,
 		Config: conf,
 		layers: layers,
 	}
@@ -43,12 +45,25 @@ func newPane(conf *PaneConfig) *Pane {
 	return &pane
 }
 
+func (p *Pane) IDValue() uint64 {
+	if p == nil {
+		return 0
+	}
+	return p.ID
+}
+
 func (p *Pane) AddLayer(num int) bool {
-	if num < 0 || num > len(p.layers) {
+	// Require sequential addition so layer index == position == ID.
+	if num < 0 || num != len(p.layers) {
 		return false
 	}
+	for _, existing := range p.layers {
+		if existing != nil && existing.idx == num {
+			return false
+		}
+	}
 	layer := NewLayerDefault(p)
-	layer.idx = len(p.layers)
+	layer.idx = num
 	if p.layerObserver != nil {
 		layer.SetObserver(p.layerObserver)
 	}
