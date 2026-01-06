@@ -156,11 +156,11 @@ func (m *MultiBucketGridManager) worldSideForView() uint32 {
 
 func intersectWithView(space plane.Space2D[uint32], bucket, viewRect spatial.AABB) (spatial.AABB, bool) {
 	if space == nil {
-		return geom.IntersectStrict(bucket, viewRect)
+		return geom.Intersection(bucket, viewRect)
 	}
 	wrapped := wrapViewRect(space, viewRect)
 	for _, frag := range wrapped {
-		if inter, ok := geom.IntersectStrict(bucket, frag); ok {
+		if inter, ok := geom.Intersection(bucket, frag); ok {
 			return inter, true
 		}
 	}

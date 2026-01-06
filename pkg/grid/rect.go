@@ -58,7 +58,7 @@ func diffRects(oldRect, newRect spatial.AABB) []spatial.AABB {
 	if rectEmpty(oldRect) {
 		return []spatial.AABB{newRect}
 	}
-	inter, ok := geom.IntersectStrict(oldRect, newRect)
+	inter, ok := geom.Intersection(oldRect, newRect)
 	if !ok {
 		return []spatial.AABB{newRect}
 	}
@@ -88,7 +88,7 @@ func rectEmpty(aabb spatial.AABB) bool {
 
 func rectIntersectsAny(rect spatial.AABB, others []geom.AABB[uint32]) bool {
 	for _, other := range others {
-		if _, ok := geom.IntersectStrict(rect, other); ok {
+		if _, ok := geom.Intersection(rect, other); ok {
 			return true
 		}
 	}
