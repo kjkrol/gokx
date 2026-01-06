@@ -103,14 +103,6 @@ func (l *Layer) Drawables() []*Drawable {
 	return out
 }
 
-// ApplyUpdateWithoutObserver updates drawable data without emitting observer events.
-func (l *Layer) ApplyUpdateWithoutObserver(drawable *Drawable, mutate func()) {
-	if drawable == nil || mutate == nil || drawable.layer != l {
-		return
-	}
-	mutate()
-}
-
 func (l *Layer) containsDrawable(drawable *Drawable) bool {
 	for _, existing := range l.drawables {
 		if existing == drawable {

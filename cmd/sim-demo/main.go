@@ -132,9 +132,7 @@ func main() {
 
 		// move polygon1
 		oldPoly1 := polygon1.AABB
-		layer2.ApplyUpdateWithoutObserver(polygon1, func() {
-			torus.Translate(&polygon1.AABB, signedVec(1, 1))
-		})
+		torus.Translate(&polygon1.AABB, signedVec(1, 1))
 		translated = append(translated, gfx.DrawableTranslate{
 			PaneID:     pane.IDValue(),
 			LayerID:    layer2.ID(),
@@ -145,9 +143,7 @@ func main() {
 
 		// move polygon2
 		oldPoly2 := polygon2.AABB
-		layer2.ApplyUpdateWithoutObserver(polygon2, func() {
-			torus.Translate(&polygon2.AABB, signedVec(0, -1))
-		})
+		torus.Translate(&polygon2.AABB, signedVec(0, -1))
 		translated = append(translated, gfx.DrawableTranslate{
 			PaneID:     pane.IDValue(),
 			LayerID:    layer2.ID(),
@@ -160,9 +156,7 @@ func main() {
 			dx := r.Intn(5) - 2
 			dy := r.Intn(5) - 2
 			old := drawable.AABB
-			layer1.ApplyUpdateWithoutObserver(drawable, func() {
-				torus.Translate(&drawable.AABB, signedVec(dx, dy))
-			})
+			torus.Translate(&drawable.AABB, signedVec(dx, dy))
 			translated = append(translated, gfx.DrawableTranslate{
 				PaneID:     pane.IDValue(),
 				LayerID:    layer1.ID(),
@@ -182,7 +176,7 @@ func main() {
 
 	// --------------------------------------
 
-	window.RefreshRate(120)
+	window.RefreshRate(30)
 
 	ctx := Context{false, window, torus}
 	window.ListenEvents(func(event gfx.Event) {
