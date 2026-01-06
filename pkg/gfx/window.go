@@ -142,21 +142,23 @@ func (w *Window) Close() {
 
 }
 
-func (w *Window) SetRenderer(renderer Renderer) {
-	if w == nil {
-		return
-	}
-	if w.renderer != nil {
-		w.renderer.Close()
-	}
-	w.renderer = renderer
-}
-
 func (w *Window) GLContext() any {
 	if w == nil || w.platformWinWrapper == nil {
 		return nil
 	}
 	return w.platformWinWrapper.GLContext()
+}
+
+// ScheduleUpdate enqueues a callback to be executed in the window loop before rendering.
+func (w *Window) ScheduleUpdate(fn func()) {
+	if w == nil || fn == nil {
+		return
+	}
+	select {
+	case w.updates <- fn:
+	default:
+		// drop if buffer full to avoid blocking producer
+	}
 }
 
 // EmitEvent injects an event into the window loop (used by simulation).
@@ -255,7 +257,6 @@ func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsCons
 				}
 			doneUpdates:
 
-				w.processLayerOps()
 				if w.drawableApplier != nil {
 					w.drawableApplier.FlushTouched()
 				}
@@ -285,63 +286,24 @@ func (w *Window) panesSnapshot() []*Pane {
 	return out
 }
 
-func (w *Window) SetLayerObserver(observer LayerObserver) {
-	if w == nil {
-		return
-	}
-	w.layerObserver = observer
-	if w.defaultPane != nil {
-		w.defaultPane.SetLayerObserver(observer)
-	}
-	for _, pane := range w.panes {
-		if pane != nil {
-			pane.SetLayerObserver(observer)
-		}
-	}
-}
-
 func (w *Window) applyDrawableEvent(event Event) {
 	applier := w.drawableApplier
 	if applier == nil {
 		return
 	}
+	flush := false
 	switch e := event.(type) {
 	case DrawableSetAdded:
 		applier.ApplyAdded(e.Items)
+		flush = true
 	case DrawableSetRemoved:
 		applier.ApplyRemoved(e.Items)
+		flush = true
 	case DrawableSetTranslated:
 		applier.ApplyTranslated(e.Items)
+		flush = true
 	}
-}
-
-func (w *Window) processLayerOps() {
-	if w == nil {
-		return
-	}
-	if w.defaultPane != nil {
-		w.defaultPane.mu.Lock()
-		layers := make([]*Layer, len(w.defaultPane.layers))
-		copy(layers, w.defaultPane.layers)
-		w.defaultPane.mu.Unlock()
-		for _, layer := range layers {
-			if layer != nil {
-				layer.ProcessOps()
-			}
-		}
-	}
-	for _, pane := range w.panes {
-		if pane == nil {
-			continue
-		}
-		pane.mu.Lock()
-		layers := make([]*Layer, len(pane.layers))
-		copy(layers, pane.layers)
-		pane.mu.Unlock()
-		for _, layer := range layers {
-			if layer != nil {
-				layer.ProcessOps()
-			}
-		}
+	if flush {
+		applier.FlushTouched()
 	}
 }

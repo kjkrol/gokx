@@ -2,16 +2,13 @@ package gridbridge
 
 import (
 	"fmt"
-	"sync"
 
-	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokg/pkg/spatial"
 	"github.com/kjkrol/gokx/pkg/gfx"
 	"github.com/kjkrol/gokx/pkg/grid"
 )
 
 type Bridge struct {
-	mu           sync.RWMutex
 	paneManagers map[*gfx.Pane]*grid.MultiBucketGridManager
 	panesByID    map[uint64]*gfx.Pane
 	managerByPID map[uint64]*grid.MultiBucketGridManager
@@ -33,11 +30,9 @@ func (b *Bridge) AttachPane(pane *gfx.Pane, manager *grid.MultiBucketGridManager
 	if pane == nil || manager == nil {
 		return
 	}
-	b.mu.Lock()
 	b.paneManagers[pane] = manager
 	b.panesByID[pane.ID] = pane
 	b.managerByPID[pane.ID] = manager
-	b.mu.Unlock()
 
 	pane.SetLayerObserver(b)
 	pane.SetLayerCreatedHandler(func(layer *gfx.Layer) {
@@ -56,9 +51,7 @@ func (b *Bridge) SetLayerConfig(layer *gfx.Layer, cfg grid.GridLevelConfig) erro
 	if b.isLayerRegistered(layer) {
 		return fmt.Errorf("layer already registered")
 	}
-	b.mu.Lock()
 	b.layerConfigs[layer] = cfg
-	b.mu.Unlock()
 	return nil
 }
 
@@ -77,15 +70,6 @@ func (b *Bridge) OnDrawableRemoved(layer *gfx.Layer, _ *gfx.Drawable, id uint64)
 		return
 	}
 	manager.QueueRemove(id)
-	b.markTouched(manager)
-}
-
-func (b *Bridge) OnDrawableUpdated(layer *gfx.Layer, drawable *gfx.Drawable, id uint64, _, newAABB plane.AABB[uint32]) {
-	manager := b.layerManager(layer)
-	if manager == nil || drawable == nil || id == 0 {
-		return
-	}
-	manager.QueueUpdate(id, newAABB, true)
 	b.markTouched(manager)
 }
 
@@ -180,24 +164,11 @@ func (b *Bridge) EntryAABB(layer *gfx.Layer, entryID uint64) (spatial.AABB, bool
 }
 
 func (b *Bridge) paneManager(pane *gfx.Pane) *grid.MultiBucketGridManager {
-	b.mu.RLock()
-	manager := b.paneManagers[pane]
-	b.mu.RUnlock()
-	return manager
+	return b.paneManagers[pane]
 }
 
 func (b *Bridge) PaneManagerByID(paneID uint64) *grid.MultiBucketGridManager {
-	b.mu.RLock()
-	manager := b.managerByPID[paneID]
-	b.mu.RUnlock()
-	return manager
-}
-
-func (b *Bridge) PaneByID(paneID uint64) *gfx.Pane {
-	b.mu.RLock()
-	pane := b.panesByID[paneID]
-	b.mu.RUnlock()
-	return pane
+	return b.managerByPID[paneID]
 }
 
 func (b *Bridge) LayerManagerByID(paneID, layerID uint64) *grid.BucketGridManager {
@@ -220,9 +191,7 @@ func (b *Bridge) registerLayer(pane *gfx.Pane, layer *gfx.Layer) error {
 	if existing := manager.Manager(key); existing != nil {
 		return nil
 	}
-	b.mu.RLock()
 	cfg, hasCfg := b.layerConfigs[layer]
-	b.mu.RUnlock()
 	if !hasCfg {
 		cfg = grid.GridLevelConfig{}
 	}
@@ -306,12 +275,10 @@ func (b *Bridge) ApplyTranslated(items []gfx.DrawableTranslate) {
 }
 
 func (b *Bridge) FlushTouched() {
-	b.mu.Lock()
 	touched := b.touched
 	if len(touched) > 0 {
 		b.touched = make(map[*grid.BucketGridManager]struct{}, len(touched))
 	}
-	b.mu.Unlock()
 	for manager := range touched {
 		if manager != nil {
 			manager.Flush()
@@ -323,7 +290,5 @@ func (b *Bridge) markTouched(manager *grid.BucketGridManager) {
 	if manager == nil {
 		return
 	}
-	b.mu.Lock()
 	b.touched[manager] = struct{}{}
-	b.mu.Unlock()
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/kjkrol/gokx/pkg/gfx"
 	"github.com/kjkrol/gokx/pkg/grid"
 	"github.com/kjkrol/gokx/pkg/gridbridge"
-	"github.com/kjkrol/gokx/pkg/sim"
 )
 
 //go:embed shader.glsl
@@ -54,9 +53,9 @@ func main() {
 	layer1 := pane.GetLayer(1)
 	layer2 := pane.GetLayer(2)
 	if err := bridge.SetLayerConfig(layer1, grid.GridLevelConfig{
-		BucketResolution: spatial.Size64x64,
+		BucketResolution: spatial.Size16x16,
 		BucketCapacity:   16,
-		OpsBufferSize:    16000,
+		OpsBufferSize:    32000,
 	}); err != nil {
 		panic(err)
 	}
@@ -128,13 +127,13 @@ func main() {
 	window.Show()
 
 	// ------- Animations -------------------
-	simulation := sim.New(50*time.Millisecond, func() (gfx.DrawableSetAdded, gfx.DrawableSetRemoved, gfx.DrawableSetTranslated) {
+	simulation := NewSimulation(20*time.Millisecond, func() (gfx.DrawableSetAdded, gfx.DrawableSetRemoved, gfx.DrawableSetTranslated) {
 		var translated []gfx.DrawableTranslate
 
 		// move polygon1
 		oldPoly1 := polygon1.AABB
-		polygon1.Update(func(shape *plane.AABB[uint32]) {
-			torus.Translate(shape, signedVec(1, 1))
+		layer2.ApplyUpdateWithoutObserver(polygon1, func() {
+			torus.Translate(&polygon1.AABB, signedVec(1, 1))
 		})
 		translated = append(translated, gfx.DrawableTranslate{
 			PaneID:     pane.IDValue(),
@@ -146,8 +145,8 @@ func main() {
 
 		// move polygon2
 		oldPoly2 := polygon2.AABB
-		polygon2.Update(func(shape *plane.AABB[uint32]) {
-			torus.Translate(shape, signedVec(0, -1))
+		layer2.ApplyUpdateWithoutObserver(polygon2, func() {
+			torus.Translate(&polygon2.AABB, signedVec(0, -1))
 		})
 		translated = append(translated, gfx.DrawableTranslate{
 			PaneID:     pane.IDValue(),
@@ -161,8 +160,8 @@ func main() {
 			dx := r.Intn(5) - 2
 			dy := r.Intn(5) - 2
 			old := drawable.AABB
-			drawable.Update(func(shape *plane.AABB[uint32]) {
-				torus.Translate(shape, signedVec(dx, dy))
+			layer1.ApplyUpdateWithoutObserver(drawable, func() {
+				torus.Translate(&drawable.AABB, signedVec(dx, dy))
 			})
 			translated = append(translated, gfx.DrawableTranslate{
 				PaneID:     pane.IDValue(),
@@ -175,8 +174,10 @@ func main() {
 
 		return gfx.DrawableSetAdded{}, gfx.DrawableSetRemoved{}, gfx.DrawableSetTranslated{Items: translated}
 	})
-	simulation.Run(window.Context(), func(event gfx.Event) {
-		window.EmitEvent(event)
+	window.ScheduleUpdate(func() {
+		simulation.Run(window.Context(), func(event gfx.Event) {
+			window.EmitEvent(event)
+		})
 	})
 
 	// --------------------------------------

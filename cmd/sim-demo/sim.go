@@ -1,4 +1,4 @@
-package sim
+package main
 
 import (
 	"context"
@@ -16,7 +16,7 @@ type Simulation struct {
 	running  bool
 }
 
-func New(duration time.Duration, step StepFunc) *Simulation {
+func NewSimulation(duration time.Duration, step StepFunc) *Simulation {
 	if duration <= 0 {
 		duration = 50 * time.Millisecond
 	}

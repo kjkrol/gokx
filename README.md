@@ -25,7 +25,7 @@ The project is intended as a foundation for experimenting with graphics, input e
 ## Quick Example
 
 `internal/renderer.NewRendererFactory` expects a single-source shader (stage/pass defines) and returns a renderer factory for `gfx.NewWindow`.
-See `cmd/main.go` and `cmd/shader.glsl` for a complete example.
+See `cmd/sim-demo/main.go` and `cmd/sim-demo/shader.glsl` for a complete example.
 
 ```go
 package main
@@ -98,7 +98,7 @@ pkg-config --modversion sdl2
 Run example:
 
 ```sh
-go run cmd/main.go
+go run ./cmd/sim-demo
 # or
 make run-sdl2
 ```
@@ -116,7 +116,7 @@ make wasm-serve
 You can select which demo app to build/run using `make`. For example:
 
 ```sh
-make DEMO=cmd/demo-quadtree/main.go run-sdl2
+make DEMO=cmd/demo-quadtree run-sdl2
 ```
 
 ## License
