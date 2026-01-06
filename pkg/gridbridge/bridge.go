@@ -121,14 +121,15 @@ func (b *Bridge) BuildFrame(pane *gfx.Pane, viewRect spatial.AABB, viewChanged b
 		if layer == nil {
 			continue
 		}
-		buckets := gridLevelPlan.Buckets
-		if len(buckets) > 0 {
-			buckets = append([]spatial.AABB(nil), buckets...)
+		indices := gridLevelPlan.BucketIndices
+		if len(indices) > 0 {
+			indices = append([]uint32(nil), indices...)
 		}
 		out.Layers = append(out.Layers, gfx.LayerPlan{
-			Layer:     layer,
-			CacheRect: gridLevelPlan.CacheRect,
-			Buckets:   buckets,
+			Layer:         layer,
+			CacheRect:     gridLevelPlan.CacheRect,
+			BucketIndices: indices,
+			BucketRect:    gridLevelPlan.BucketRect,
 		})
 	}
 	return out

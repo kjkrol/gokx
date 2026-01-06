@@ -114,7 +114,11 @@ func (m *MultiBucketGridManager) BuildFrame(viewRect spatial.AABB, viewChanged b
 			}
 		}
 		for _, gridLevel := range gridLevels {
-			for _, bucket := range gridLevel.Buckets {
+			if gridLevel.BucketRect == nil {
+				continue
+			}
+			for _, idx := range gridLevel.BucketIndices {
+				bucket := gridLevel.BucketRect(idx)
 				clipped, ok := intersectWithView(m.space, bucket, viewRect)
 				if !ok {
 					continue

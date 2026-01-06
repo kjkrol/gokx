@@ -360,7 +360,7 @@ func (r *renderer) renderLayerBuckets(layer *gfx.Layer, plan gfx.LayerPlan, worl
 	}
 	state := r.ensureLayerState(layer, cacheWidth, cacheHeight)
 	r.syncBucketStates(layer, state)
-	if len(plan.Buckets) == 0 {
+	if plan.BucketRect == nil || len(plan.BucketIndices) == 0 {
 		return
 	}
 	bgColor := colorToFloat(layer.Background())
@@ -373,7 +373,8 @@ func (r *renderer) renderLayerBuckets(layer *gfx.Layer, plan gfx.LayerPlan, worl
 	r.gl.Call("uniform2f", r.colorWorldUniform, float32(worldSize.X), float32(worldSize.Y))
 	r.gl.Call("enable", r.consts.scissorTest)
 
-	for _, bucket := range plan.Buckets {
+	for _, idx := range plan.BucketIndices {
+		bucket := plan.BucketRect(idx)
 		scissor := bucketScissor(bucket, cacheRect, worldSize, state.width, state.height)
 		if scissor.W <= 0 || scissor.H <= 0 {
 			continue

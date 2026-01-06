@@ -16,8 +16,9 @@ type GridLevelConfig struct {
 }
 
 type BucketPlan struct {
-	CacheRect spatial.AABB
-	Buckets   []spatial.AABB
+	CacheRect     spatial.AABB
+	BucketIndices []uint32
+	BucketRect    func(uint32) geom.AABB[uint32]
 }
 
 type BucketDelta = spatial.BucketDelta
@@ -124,8 +125,9 @@ func (m *BucketGridManager) Plan(viewRect spatial.AABB, marginBuckets int) Bucke
 		m.dirty.cacheValid = true
 	}
 	return BucketPlan{
-		CacheRect: cacheRect,
-		Buckets:   m.collectDirtyBuckets(cacheRect),
+		CacheRect:     cacheRect,
+		BucketIndices: m.collectDirtyBucketIndices(cacheRect),
+		BucketRect:    m.bucketRect,
 	}
 }
 
@@ -159,7 +161,7 @@ func (m *BucketGridManager) MarkRectDirty(rect spatial.AABB) {
 	})
 }
 
-func (m *BucketGridManager) collectDirtyBuckets(cacheRect spatial.AABB) []spatial.AABB {
+func (m *BucketGridManager) collectDirtyBucketIndices(cacheRect spatial.AABB) []uint32 {
 	if len(m.dirty.dirtyList) == 0 {
 		return nil
 	}
@@ -169,19 +171,19 @@ func (m *BucketGridManager) collectDirtyBuckets(cacheRect spatial.AABB) []spatia
 			fragments = append(fragments, aabb)
 		})
 	}
-	out := make([]spatial.AABB, 0, len(m.dirty.dirtyList))
+	indices := make([]uint32, 0, len(m.dirty.dirtyList))
 	keep := m.dirty.dirtyList[:0]
 	for _, idx := range m.dirty.dirtyList {
 		bucket := m.bucketRect(idx)
 		if rectIntersectsAny(bucket, fragments) {
-			out = append(out, bucket)
+			indices = append(indices, idx)
 			delete(m.dirty.dirty, idx)
 		} else {
 			keep = append(keep, idx)
 		}
 	}
 	m.dirty.dirtyList = keep
-	return out
+	return indices
 }
 
 func (m *BucketGridManager) bucketRect(idx uint32) geom.AABB[uint32] {

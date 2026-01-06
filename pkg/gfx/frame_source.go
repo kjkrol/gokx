@@ -1,6 +1,9 @@
 package gfx
 
-import "github.com/kjkrol/gokg/pkg/spatial"
+import (
+	"github.com/kjkrol/gokg/pkg/geom"
+	"github.com/kjkrol/gokg/pkg/spatial"
+)
 
 type FrameSource interface {
 	BuildFrame(pane *Pane, viewRect spatial.AABB, viewChanged bool, layers []*Layer) FramePlan
@@ -16,9 +19,10 @@ type FramePlan struct {
 }
 
 type LayerPlan struct {
-	Layer     *Layer
-	CacheRect spatial.AABB
-	Buckets   []spatial.AABB
+	Layer         *Layer
+	CacheRect     spatial.AABB
+	BucketIndices []uint32
+	BucketRect    func(uint32) geom.AABB[uint32]
 }
 
 type BucketDelta struct {
