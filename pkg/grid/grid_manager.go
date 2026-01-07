@@ -172,18 +172,35 @@ func (m *BucketGridManager) collectDirtyBucketIndices(cacheRect spatial.AABB) []
 		})
 	}
 	indices := make([]uint32, 0, len(m.dirty.dirtyList))
-	keep := m.dirty.dirtyList[:0]
 	for _, idx := range m.dirty.dirtyList {
+		if _, ok := m.dirty.dirty[idx]; !ok {
+			continue
+		}
 		bucket := m.bucketRect(idx)
 		if rectIntersectsAny(bucket, fragments) {
 			indices = append(indices, idx)
-			delete(m.dirty.dirty, idx)
-		} else {
+		}
+	}
+	return indices
+}
+
+func (m *BucketGridManager) MarkBucketsRendered(indices []uint32) {
+	if len(indices) == 0 {
+		return
+	}
+	for _, idx := range indices {
+		delete(m.dirty.dirty, idx)
+	}
+	if len(m.dirty.dirtyList) == 0 {
+		return
+	}
+	keep := m.dirty.dirtyList[:0]
+	for _, idx := range m.dirty.dirtyList {
+		if _, ok := m.dirty.dirty[idx]; ok {
 			keep = append(keep, idx)
 		}
 	}
 	m.dirty.dirtyList = keep
-	return indices
 }
 
 func (m *BucketGridManager) bucketRect(idx uint32) geom.AABB[uint32] {

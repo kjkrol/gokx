@@ -3,6 +3,7 @@ package gridbridge
 import (
 	"fmt"
 
+	"github.com/kjkrol/gokg/pkg/plane"
 	"github.com/kjkrol/gokg/pkg/spatial"
 	"github.com/kjkrol/gokx/pkg/gfx"
 	"github.com/kjkrol/gokx/pkg/grid"
@@ -164,6 +165,14 @@ func (b *Bridge) EntryAABB(layer *gfx.Layer, entryID uint64) (spatial.AABB, bool
 	return manager.EntryAABB(entryID)
 }
 
+func (b *Bridge) AcknowledgeRendered(layer *gfx.Layer, bucketIndices []uint32) {
+	manager := b.layerManager(layer)
+	if manager == nil {
+		return
+	}
+	manager.MarkBucketsRendered(bucketIndices)
+}
+
 func (b *Bridge) paneManager(pane *gfx.Pane) *grid.MultiBucketGridManager {
 	return b.paneManagers[pane]
 }
@@ -271,6 +280,15 @@ func (b *Bridge) ApplyTranslated(items []gfx.DrawableTranslate) {
 			continue
 		}
 		manager.QueueUpdate(item.DrawableID, item.New, true)
+		old := item.Old
+		base := old.AABB
+		if base.TopLeft != base.BottomRight {
+			manager.QueueDirtyRect(base)
+			old.VisitFragments(func(_ plane.FragPosition, frag spatial.AABB) bool {
+				manager.QueueDirtyRect(frag)
+				return true
+			})
+		}
 		b.markTouched(manager)
 	}
 }

@@ -35,6 +35,7 @@ func main() {
 			WorldResolution: worldRes,
 			WorldWrap:       true,
 		},
+		ChannelBufferSize: 16000,
 	}
 
 	bridge := gridbridge.NewBridge()
@@ -55,7 +56,7 @@ func main() {
 	if err := bridge.SetLayerConfig(layer1, grid.GridLevelConfig{
 		BucketResolution: spatial.Size16x16,
 		BucketCapacity:   16,
-		OpsBufferSize:    32000,
+		OpsBufferSize:    16000,
 	}); err != nil {
 		panic(err)
 	}
@@ -105,13 +106,13 @@ func main() {
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	numberOfPoints := 10000
+	numberOfPoints := 1
 	pointDrawables := make([]*gfx.Drawable, 0, numberOfPoints)
 	for range numberOfPoints {
 		randX := uint32(r.Intn(worldSide))
 		randY := uint32(r.Intn(worldSide))
 		vec := geom.NewVec(randX, randY)
-		planeBox := torus.WrapVec(vec)
+		planeBox := torus.WrapAABB(geom.NewAABBAt(vec, 1, 1))
 		drawable := &gfx.Drawable{
 			ID:    gfx.NextDrawableID(),
 			AABB:  planeBox,
@@ -127,7 +128,7 @@ func main() {
 	window.Show()
 
 	// ------- Animations -------------------
-	simulation := NewSimulation(20*time.Millisecond, func() (gfx.DrawableSetAdded, gfx.DrawableSetRemoved, gfx.DrawableSetTranslated) {
+	simulation := NewSimulation(5*time.Millisecond, func() (gfx.DrawableSetAdded, gfx.DrawableSetRemoved, gfx.DrawableSetTranslated) {
 		var translated []gfx.DrawableTranslate
 
 		// move polygon1
@@ -153,8 +154,8 @@ func main() {
 		})
 
 		for _, drawable := range pointDrawables {
-			dx := r.Intn(5) - 2
-			dy := r.Intn(5) - 2
+			dx := r.Intn(15) - 7
+			dy := r.Intn(15) - 7
 			old := drawable.AABB
 			torus.Translate(&drawable.AABB, signedVec(dx, dy))
 			translated = append(translated, gfx.DrawableTranslate{
@@ -176,7 +177,7 @@ func main() {
 
 	// --------------------------------------
 
-	window.RefreshRate(30)
+	window.RefreshRate(20)
 
 	ctx := Context{false, window, torus}
 	window.ListenEvents(func(event gfx.Event) {
@@ -242,7 +243,7 @@ func drawDots(wX, wY int, ctx *Context) {
 	wx, wy := pane.WindowToWorldCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
 	vec := geom.NewVec(wx, wy)
-	planeBox := ctx.plane.WrapVec(vec)
+	planeBox := ctx.plane.WrapAABB(geom.NewAABBAt(vec, 1, 1))
 	drawable := &gfx.Drawable{
 		ID:    gfx.NextDrawableID(),
 		AABB:  planeBox,

@@ -23,8 +23,8 @@ func appendAABBInstance(dst []float32, aabb geom.AABB[uint32], style gfx.Spatial
 
 	x0 := float32(minX)
 	y0 := float32(minY)
-	x1 := float32(maxX) + 1
-	y1 := float32(maxY) + 1
+	x1 := float32(maxX)
+	y1 := float32(maxY)
 	if x1 <= x0 || y1 <= y0 {
 		return dst
 	}

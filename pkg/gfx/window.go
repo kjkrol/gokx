@@ -11,17 +11,25 @@ import (
 )
 
 type WindowConfig struct {
-	PositionX   int
-	PositionY   int
-	Width       int
-	Height      int
-	BorderWidth int
-	Title       string
-	World       WorldConfig
+	PositionX         int
+	PositionY         int
+	Width             int
+	Height            int
+	BorderWidth       int
+	Title             string
+	World             WorldConfig
+	ChannelBufferSize int
 }
 
 func (w WindowConfig) convert() platform.WindowConfig {
-	return platform.WindowConfig{PositionX: w.PositionX, PositionY: w.PositionY, Width: w.Width, Height: w.Height, BorderWidth: w.BorderWidth, Title: w.Title}
+	return platform.WindowConfig{
+		PositionX:   w.PositionX,
+		PositionY:   w.PositionY,
+		Width:       w.Width,
+		Height:      w.Height,
+		BorderWidth: w.BorderWidth,
+		Title:       w.Title,
+	}
 }
 
 type Window struct {
@@ -48,11 +56,15 @@ const maxEventWait = 50 * time.Millisecond
 
 func NewWindow(conf WindowConfig, factory RendererFactory) *Window {
 	platformConfig := conf.convert()
+	bufferSize := conf.ChannelBufferSize
+	if bufferSize == 0 {
+		bufferSize = 1024
+	}
 	window := Window{
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
-		updates:            make(chan func(), 1024),
-		internalEvents:     make(chan Event, 1024),
+		updates:            make(chan func(), bufferSize),
+		internalEvents:     make(chan Event, bufferSize),
 		width:              conf.Width,
 		height:             conf.Height,
 	}

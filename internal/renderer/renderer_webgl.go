@@ -122,15 +122,6 @@ func (r *renderer) Render(w *gfx.Window) {
 	}
 
 	panes := w.Panes()
-	type paneFrame struct {
-		pane       *gfx.Pane
-		layers     []*gfx.Layer
-		plan       gfx.FramePlan
-		layerPlans map[*gfx.Layer]gfx.LayerPlan
-		worldSize  geom.Vec[uint32]
-	}
-	paneFrames := make([]paneFrame, 0, len(panes))
-
 	for _, pane := range panes {
 		if pane == nil || pane.Config == nil {
 			continue
@@ -166,20 +157,10 @@ func (r *renderer) Render(w *gfx.Window) {
 			}
 			r.renderLayerBuckets(layer, plan, worldSize)
 		}
-		paneFrames = append(paneFrames, paneFrame{
-			pane:       pane,
-			layers:     layers,
-			plan:       frame,
-			layerPlans: layerPlans,
-			worldSize:  worldSize,
-		})
-	}
-
-	for _, frame := range paneFrames {
-		if len(frame.plan.CompositeRects) == 0 {
+		if len(frame.CompositeRects) == 0 {
 			continue
 		}
-		r.compositePane(frame.pane, frame.layers, frame.layerPlans, frame.plan, frame.worldSize)
+		r.compositePane(pane, layers, layerPlans, frame, worldSize)
 	}
 
 	r.gl.Call("bindFramebuffer", r.consts.framebuffer, js.Null())
@@ -193,12 +174,11 @@ func (r *renderer) Render(w *gfx.Window) {
 	r.gl.Call("activeTexture", r.consts.texture0)
 	r.gl.Call("uniform1i", r.compositeTexUniform, 0)
 
-	for _, frame := range paneFrames {
-		state := r.paneStates[frame.pane]
+	for _, pane := range panes {
+		state := r.paneStates[pane]
 		if state == nil || state.texture.IsUndefined() || state.texture.IsNull() {
 			continue
 		}
-		pane := frame.pane
 		if pane == nil || pane.Config == nil {
 			continue
 		}
@@ -392,6 +372,7 @@ func (r *renderer) renderLayerBuckets(layer *gfx.Layer, plan gfx.LayerPlan, worl
 	}
 
 	r.gl.Call("disable", r.consts.scissorTest)
+	r.source.AcknowledgeRendered(layer, plan.BucketIndices)
 }
 
 func (r *renderer) compositePane(pane *gfx.Pane, layers []*gfx.Layer, layerPlans map[*gfx.Layer]gfx.LayerPlan, frame gfx.FramePlan, worldSize geom.Vec[uint32]) {

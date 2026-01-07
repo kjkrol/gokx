@@ -9,6 +9,7 @@ type FrameSource interface {
 	BuildFrame(pane *Pane, viewRect spatial.AABB, viewChanged bool, layers []*Layer) FramePlan
 	ConsumeBucketDeltas(layer *Layer) []BucketDelta
 	EntryAABB(layer *Layer, entryID uint64) (spatial.AABB, bool)
+	AcknowledgeRendered(layer *Layer, bucketIndices []uint32)
 }
 
 type FramePlan struct {
