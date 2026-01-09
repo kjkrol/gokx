@@ -2,9 +2,6 @@ package gfx
 
 import (
 	"context"
-	"math"
-	"runtime"
-	"sync"
 	"time"
 
 	"github.com/kjkrol/gokx/internal/platform"
@@ -37,34 +34,24 @@ type Window struct {
 	renderer           Renderer
 	defaultPane        *Pane
 	panes              map[string]*Pane
-	rerfreshing        bool
-	refreshDelay       time.Duration
-	width              int
-	height             int
-	wg                 sync.WaitGroup
-	ctx                context.Context
-	cancel             context.CancelFunc
 
-	updates         chan func()
-	internalEvents  chan Event
+	width  int
+	height int
+
+	eventLoop           *EventBus
+	rendererRefreshRate time.Duration
+	ecsRefreshRate      time.Duration
+
 	layerObserver   LayerObserver
 	nextPaneID      uint64
 	drawableApplier DrawableEventsApplier
 }
 
-const maxEventWait = 50 * time.Millisecond
-
 func NewWindow(conf WindowConfig, factory RendererFactory) *Window {
 	platformConfig := conf.convert()
-	bufferSize := conf.ChannelBufferSize
-	if bufferSize == 0 {
-		bufferSize = 1024
-	}
 	window := Window{
 		platformWinWrapper: platform.NewPlatformWindowWrapper(platformConfig),
 		panes:              make(map[string]*Pane),
-		updates:            make(chan func(), bufferSize),
-		internalEvents:     make(chan Event, bufferSize),
 		width:              conf.Width,
 		height:             conf.Height,
 	}
@@ -87,8 +74,17 @@ func NewWindow(conf WindowConfig, factory RendererFactory) *Window {
 	if factory != nil {
 		window.renderer = factory(&window)
 	}
-	window.ctx, window.cancel = context.WithCancel(context.Background())
-	window.rerfreshing = false
+
+	window.eventLoop = NewEventLoop(
+		conf.ChannelBufferSize,
+		func(timeoutMs int) (Event, bool) {
+			platformEvent := window.platformWinWrapper.NextEventTimeout(timeoutMs)
+			if _, ok := platformEvent.(platform.TimeoutEvent); ok {
+				return nil, false
+			}
+			return convert(platformEvent), true
+		})
+
 	window.nextPaneID = 1
 	return &window
 }
@@ -127,19 +123,38 @@ func (w *Window) Show() {
 }
 
 func (w *Window) RefreshRate(fps int) {
-	if fps <= 0 {
-		fps = 60
+	w.rendererRefreshRate = time.Second / time.Duration(fps)
+}
+
+func (w *Window) ECSRefreshRate(rps int) {
+	w.rendererRefreshRate = time.Second / time.Duration(rps)
+}
+
+func (w *Window) ListenEvents(dispather EventDispatcher) {
+	dispatch := func(event Event) {
+		w.applyDrawableEvent(event)
+		if dispather != nil {
+			dispather(event)
+		}
 	}
-	// zapamiętaj w oknie docelowy FPS
-	ms := int(math.Abs(float64(1000.0 / fps)))
-	w.refreshDelay = time.Duration(ms) * time.Millisecond
+
+	renderUpdater := newRenderUpdater(w.rendererRefreshRate, func() {
+		w.drawableApplier.FlushTouched()
+		w.platformWinWrapper.BeginFrame()
+		w.renderer.Render(w)
+		w.platformWinWrapper.EndFrame()
+	})
+	ecsAdaptiveUpdater := newECSUpdater(w.ecsRefreshRate, func(d time.Duration) {})
+
+	w.eventLoop.Run(dispatch, renderUpdater, ecsAdaptiveUpdater)
 }
 
 func (w *Window) Stop() {
-	w.cancel()
+	w.eventLoop.cancel()
 }
 
 func (w *Window) Close() {
+	w.Stop()
 	if w.renderer != nil {
 		w.renderer.Close()
 		w.renderer = nil
@@ -154,6 +169,7 @@ func (w *Window) Close() {
 
 }
 
+// TODO: sprawdzic czy uzywane; jesli nie usunac
 func (w *Window) GLContext() any {
 	if w == nil || w.platformWinWrapper == nil {
 		return nil
@@ -161,127 +177,24 @@ func (w *Window) GLContext() any {
 	return w.platformWinWrapper.GLContext()
 }
 
-// ScheduleUpdate enqueues a callback to be executed in the window loop before rendering.
-func (w *Window) ScheduleUpdate(fn func()) {
-	if w == nil || fn == nil {
-		return
-	}
-	select {
-	case w.updates <- fn:
-	default:
-		// drop if buffer full to avoid blocking producer
-	}
-}
-
 // EmitEvent injects an event into the window loop (used by simulation).
 func (w *Window) EmitEvent(event Event) {
-	if w == nil || event == nil {
-		return
-	}
-	select {
-	case w.internalEvents <- event:
-	default:
-		// drop if buffer full to avoid blocking producer
-	}
+	w.eventLoop.EmitEvent(event)
 }
 
 func (w *Window) Context() context.Context {
 	if w == nil {
 		return nil
 	}
-	return w.ctx
+	return w.eventLoop.ctx
 }
 
+// TODO: ta metoda jest STASZLIWIE dziwna; postarac sie to usunac
 func (w *Window) SetDrawableEventsApplier(applier DrawableEventsApplier) {
 	if w == nil {
 		return
 	}
 	w.drawableApplier = applier
-}
-
-func (w *Window) ListenEvents(handleEvent func(event Event), strategy EventsConsumerStrategy) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	delay := w.refreshDelay
-	if delay == 0 {
-		delay = time.Second / 60 // domyślnie 60 FPS
-	}
-	if strategy == nil {
-		strategy = DrainAll()
-	}
-
-	dispatch := func(event Event) {
-		w.applyDrawableEvent(event)
-		if handleEvent != nil {
-			handleEvent(event)
-		}
-	}
-
-	poll := func(timeoutMs int) (Event, bool) {
-		select {
-		case ev := <-w.internalEvents:
-			return ev, true
-		default:
-		}
-		platformEvent := w.platformWinWrapper.NextEventTimeout(timeoutMs)
-		if _, ok := platformEvent.(platform.TimeoutEvent); ok {
-			return nil, false
-		}
-		return convert(platformEvent), true
-	}
-
-	nextRender := time.Now().Add(delay)
-
-	for {
-		select {
-		case <-w.ctx.Done():
-			w.wg.Wait()
-			return
-		default:
-			now := time.Now()
-			timeout := nextRender.Sub(now)
-			if timeout < 0 {
-				timeout = 0
-			}
-			if timeout > maxEventWait {
-				timeout = maxEventWait
-			}
-
-			timeoutMs := int(timeout / time.Millisecond)
-			if timeout > 0 && timeoutMs == 0 {
-				timeoutMs = 1
-			}
-
-			strategy.Consume(poll, dispatch, timeoutMs)
-
-			// sprawdź czy czas na render
-			now = time.Now()
-			if !now.Before(nextRender) {
-				// 🔹 wykonaj wszystkie oczekujące update’y
-				for {
-					select {
-					case upd := <-w.updates:
-						upd()
-					default:
-						goto doneUpdates
-					}
-				}
-			doneUpdates:
-
-				if w.drawableApplier != nil {
-					w.drawableApplier.FlushTouched()
-				}
-
-				w.platformWinWrapper.BeginFrame()
-				if w.renderer != nil {
-					w.renderer.Render(w)
-				}
-				nextRender = now.Add(delay)
-				w.platformWinWrapper.EndFrame()
-			}
-		}
-	}
 }
 
 func (w *Window) panesSnapshot() []*Pane {
@@ -315,6 +228,8 @@ func (w *Window) applyDrawableEvent(event Event) {
 		applier.ApplyTranslated(e.Items)
 		flush = true
 	}
+
+	// TODO: ta logika wola o pomste do nieba
 	if flush {
 		applier.FlushTouched()
 	}

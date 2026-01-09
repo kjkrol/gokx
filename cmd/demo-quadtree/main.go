@@ -89,9 +89,7 @@ func main() {
 
 	renderQuadTree(&ctx)
 
-	window.ListenEvents(func(event gfx.Event) {
-		handleEvent(event, &ctx)
-	}, gfx.DrainAll())
+	window.ListenEvents(func(event gfx.Event) { handleEvent(event, &ctx) })
 
 	fmt.Println("Program closed")
 

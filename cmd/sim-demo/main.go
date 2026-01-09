@@ -106,7 +106,7 @@ func main() {
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	numberOfPoints := 1
+	numberOfPoints := 1000
 	pointDrawables := make([]*gfx.Drawable, 0, numberOfPoints)
 	for range numberOfPoints {
 		randX := uint32(r.Intn(worldSide))
@@ -169,32 +169,31 @@ func main() {
 
 		return gfx.DrawableSetAdded{}, gfx.DrawableSetRemoved{}, gfx.DrawableSetTranslated{Items: translated}
 	})
-	window.ScheduleUpdate(func() {
-		simulation.Run(window.Context(), func(event gfx.Event) {
-			window.EmitEvent(event)
-		})
+	simulation.Run(window.Context(), func(event gfx.Event) {
+		window.EmitEvent(event)
 	})
 
 	// --------------------------------------
 
-	window.RefreshRate(20)
+	ctx := DemoContext{false, window, torus}
 
-	ctx := Context{false, window, torus}
+	window.RefreshRate(30)
+	window.ECSRefreshRate(120)
 	window.ListenEvents(func(event gfx.Event) {
 		handleEvent(event, &ctx)
-	}, gfx.DrainAll())
+	})
 
 	fmt.Println("Program closed")
 
 }
 
-type Context struct {
+type DemoContext struct {
 	lmbPressed bool
 	window     *gfx.Window
 	plane      plane.Space2D[uint32]
 }
 
-func handleEvent(event gfx.Event, ctx *Context) {
+func handleEvent(event gfx.Event, ctx *DemoContext) {
 	switch e := event.(type) {
 	case gfx.Expose:
 		fmt.Println("Window exposed")
@@ -238,7 +237,7 @@ func handleEvent(event gfx.Event, ctx *Context) {
 	}
 }
 
-func drawDots(wX, wY int, ctx *Context) {
+func drawDots(wX, wY int, ctx *DemoContext) {
 	pane := ctx.window.GetDefaultPane()
 	wx, wy := pane.WindowToWorldCoords(wX, wY)
 	layer1 := pane.GetLayer(1)
